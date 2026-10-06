@@ -1,0 +1,38 @@
+{
+  "name": "@nsnanocat/url",
+  "description": "Polyfill URL and URLSearchParams to match at least iOS 15 JavaScriptCore",
+  "author": "VirgilClyne <Virgil@nanocat.me>",
+  "homepage": "https://NSNanoCat.github.io/url",
+  "keywords": [
+    "loon",
+    "quantumult",
+    "surge",
+    "shadowrocket",
+    "stash",
+    "egern",
+    "jscore",
+    "javascriptcore"
+  ],
+  "license": "Apache-2.0",
+  "bugs": "https://github.com/NSNanoCat/URL/issues",
+  "main": "URL.mjs",
+  "type": "module",
+  "scripts": {
+    "tsc:build": "npx tsc",
+    "test": "npx mocha"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NSNanoCat/url.git"
+  },
+  "files": [
+    "URL.mjs",
+    "URLSearchParams.mjs"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "mocha": "^10.8.2",
+    "typescript": "^5.6.3"
+  },
+  "version": "1.2.4"
+}

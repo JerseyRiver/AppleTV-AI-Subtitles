@@ -1,0 +1,51 @@
+#!name = AppleTV AI Subtitles
+#!desc = Apple TV 中文字幕：Gemini 翻译、设备缓存、可选自建外部字幕网关。基于 DualSubs 修改；字幕需手动选择。API Key 和网关地址由使用者自行填写。
+#!author = JerseyRiver[https://github.com/JerseyRiver]
+#!homepage = https://github.com/JerseyRiver/AppleTV-AI-Subtitles
+#!tag = AppleTV AI Subtitles
+#!system = iOS,iPadOS,macOS
+#!date = 2026-10-07
+#!version = 1.0.0
+#!system_version = 15
+
+# Upstream: DualSubs Universal / VirgilClyne. See repository NOTICE and LICENSE.
+# Source + licenses: https://github.com/JerseyRiver/AppleTV-AI-Subtitles
+
+[Argument]
+Types = input,"Official,Translate",tag=[字幕] 启用类型,desc=请选择要添加的字幕选项，如果为标准播放器，则会在字幕选项中新增勾选字幕选项。
+Languages[0] = select,"AUTO","ZH","ZH-HANS","ZH-HK","ZH-HANT","EN","ES","JA","KO","DE","FR","TR","KM","AR","ID",tag=[字幕] 主语言（源语言）,desc=当“主语言”字幕存在时，将生成“主语言/副语言（翻译）”与“主语言（外挂）”的字幕或字幕选项。
+Languages[1] = select,"ZH","ZH-HANS","ZH-HK","ZH-HANT","EN","EN-US","ES","ES-ES","ES-419","JA","KO","DE","FR","TR","KM","AR","ID",tag=[字幕] 副语言（目标语言）,desc=当“副语言”字幕存在时，将生成“副语言/主语言（官方）”的字幕或字幕选项。
+Position = select,"Reverse","Forward",tag=[字幕] 主语言（源语言）字幕位置,desc=主语言（源语言）字幕的显示位置。
+Vendor = input,"Gemini",tag=[翻译器] 服务商API,desc=此插件使用 Gemini。
+GeminiAPIKey = input,"",tag=[Gemini] API Key,desc=填写你自己的 Gemini API Key。只保存在你的 Loon 配置中；请勿分享配置或抓包。
+GatewayURL = input,"",tag=[外部字幕] 网关地址（可选）,desc=无独立字幕仅有 CC 的影片需要自建网关。填写 https://你的域名/v1/你的访问令牌；留空禁用。不要填写别人的私有服务器。
+GeminiModel = input,"gemini-3.5-flash-lite",tag=[Gemini] 模型,desc=填写你账号可用的精确模型 ID，可按需修改。
+GeminiBatchSize = select,"400","300","600",tag=[Gemini] 每批字幕条数,desc=每批越大，请求次数越少，但单次等待和输出长度越高。
+ShowOnly = switch,false,tag=[翻译器] 只显示翻译字幕,desc=是否仅显示翻译后字幕，不显示源语言字幕。
+LogLevel = select,"WARN","OFF","ERROR","INFO","DEBUG","ALL",tag=[调试] 日志等级,desc=选择脚本日志的输出等级，低于所选等级的日志将全部输出。
+
+[Rewrite]
+# 避免 UTS 的 304 空响应与播放地址改写冲突；不修改地区、商店、首页或账号。
+^https?:\/\/uts-api\.itunes\.apple\.com\/uts\/(v1|v2|v3)\/ header-del If-None-Match if-none-match If-Modified-Since if-modified-since
+
+# 完成 MITM 后回源到 Apple 真实播放服务。
+^https?:\/\/play-cdn\.itunes\.apple\.com header https://play.itunes.apple.com
+^https?:\/\/play-edge-cdn\.itunes\.apple\.com header https://play-edge.itunes.apple.com
+
+[Script]
+# 保留极简播放桥接，同时缓存 videoAssetId、片名、年份和完整播放时长供外部字幕匹配。
+http-response ^https?:\/\/uts-api\.itunes\.apple\.com\/uts\/(v1|v2|v3)\/ requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Apple.Metadata.response.js, tag=AppleTV.AI.TV.Metadata.response
+
+http-response ^https?:\/\/(play|play-edge|hls)\.itunes\.apple\.com\/WebObjects\/(MZPlay|MZPlayLocal)\.woa\/hls\/playlist\.m3u8 requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Manifest.response.bundle.js, tag=AppleTV.AI.TV.M3U8.Master.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+http-response ^https?:\/\/vod-(.+)-amt\.tv\.apple\.com\/itunes-assets\/(.+)\/([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(.+)_subtitles(_V\d)?\.m3u8\?(.*)subtype= requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Manifest.response.bundle.js, tag=AppleTV.AI.TV.M3U8.Subtitles.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+http-response ^https?:\/\/vod-(.+)-amt\.tv\.apple\.com\/itunes-assets\/(.+)\/([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(.+)\.webvtt\?(.*)subtype=(Official|External) requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Composite.Subtitles.response.bundle.js, tag=AppleTV.AI.TV.Composite.Subtitles.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+http-response ^https?:\/\/vod-(.+)-amt\.tv\.apple\.com\/itunes-assets\/(.+)\/([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(.+)\.webvtt\?(.*)subtype=Translate requires-body=1, timeout=60, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Translate.response.bundle.js, tag=AppleTV.AI.TV.Translate.Subtitles.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+
+http-response ^https?:\/\/(play|play-edge|hls)\.itunes\.apple\.com\/WebObjects\/(MZPlay|MZPlayLocal)\.woa\/hls\/subscription\/playlist\.m3u8 requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Manifest.response.bundle.js, tag=AppleTV.AI.TV+.M3U8.Master.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+http-response ^https?:\/\/(play|play-edge|hls)\.itunes\.apple\.com\/WebObjects\/(MZPlay|MZPlayLocal)\.woa\/hls\/subscription\/stream\/playlist\.m3u8\?(.*)subtype= requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Manifest.response.bundle.js, tag=AppleTV.AI.TV+.M3U8.Subtitles.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+http-response ^https?:\/\/vod-(.+)-(aoc|svod)\.tv\.apple\.com\/itunes-assets\/(.+)\/([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(.+)_subtitles_V\d\.m3u8\?(.*)subtype= requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Manifest.response.bundle.js, tag=AppleTV.AI.TV+.M3U8.Subtitles.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+http-response ^https?:\/\/vod-(.+)-(aoc|svod)\.tv\.apple\.com\/itunes-assets\/(.+)\/([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(.+)\.webvtt\?(.*)subtype=(Official|External) requires-body=1, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Composite.Subtitles.response.bundle.js, tag=AppleTV.AI.TV+.Composite.Subtitles.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+http-response ^https?:\/\/vod-(.+)-(aoc|svod)\.tv\.apple\.com\/itunes-assets\/(.+)\/([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(.+)\.webvtt\?(.*)subtype=Translate requires-body=1, timeout=60, script-path=https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/scripts/Translate.response.bundle.js, tag=AppleTV.AI.TV+.Translate.Subtitles.response, argument=[{Types},{Languages[0]},{Languages[1]},{Position},{Vendor},{GeminiAPIKey},{GatewayURL},{GeminiModel},{GeminiBatchSize},{ShowOnly},{LogLevel}]
+
+[MITM]
+hostname = uts-api.itunes.apple.com, play-cdn.itunes.apple.com, play-edge-cdn.itunes.apple.com, hls.itunes.apple.com, hls-svod.itunes.apple.com, vod-*.tv.apple.com

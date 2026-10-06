@@ -1,0 +1,26 @@
+{
+  "name": "appletv-ai-subtitles",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Apple TV subtitles for Loon: Gemini translation and an optional self-hosted subtitle gateway",
+  "author": "JerseyRiver",
+  "license": "GPL-3.0-only",
+  "homepage": "https://github.com/JerseyRiver/AppleTV-AI-Subtitles",
+  "repository": { "type": "git", "url": "https://github.com/JerseyRiver/AppleTV-AI-Subtitles.git" },
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "build": "rspack build -c rspack.config.js --mode=production && node scripts/finalize-build.mjs",
+    "test": "node test/verify-cache-storage.mjs && node test/verify-concurrent-lock.mjs && node test/verify-concurrent-lock.mjs --429 && node test/verify-manifest-safety.mjs && node test/verify-metadata.mjs && node test/verify-translation.mjs && node test/verify-plugin.mjs",
+    "test:server": "cd server && python3 -m unittest -v",
+    "privacy": "node scripts/privacy-check.mjs"
+  },
+  "dependencies": {
+    "crypto-js": "4.2.0"
+  },
+  "devDependencies": {
+    "@rspack/cli": "1.5.8",
+    "@rspack/core": "1.5.8",
+    "node-polyfill-webpack-plugin": "4.1.0"
+  }
+}

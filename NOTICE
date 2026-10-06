@@ -1,0 +1,52 @@
+AppleTV AI Subtitles
+Maintainer and project-specific modifications: JerseyRiver, 2026.
+Source: https://github.com/JerseyRiver/AppleTV-AI-Subtitles
+
+This is a modified distribution, not an entirely original implementation and
+not an official release by Apple, Google, SubDL, DualSubs, or iRingo.
+
+The Loon manifest/subtitle pipeline, supporting classes, language database and
+environment helpers derive from DualSubs Universal v1.7.5 by VirgilClyne and
+contributors, distributed under Apache License 2.0:
+  https://github.com/DualSubs/Universal
+  https://github.com/VirgilClyne
+The upstream Apache license is preserved in licenses/Apache-2.0.txt.
+Original author comments are intentionally retained in the corresponding files.
+
+The included parsers are upstream work:
+  DualSubs/EXTM3U, version 0.8.8 — GNU GPL version 3
+    https://github.com/DualSubs/EXTM3U
+  DualSubs/WebVTT, version 2.2.0 — GNU GPL version 3
+    https://github.com/DualSubs/WebVTT
+  NanoCat-Me/XML, version as supplied with Universal — Apache License 2.0
+    https://github.com/NanoCat-Me/XML
+Their license texts are preserved in src/<parser>/LICENSE. The combined plugin
+distribution is licensed under GPL-3.0-only, while upstream Apache-licensed
+files retain their original license. See LICENSE for GPL terms.
+
+Apple playback bridge ideas follow the iRingo Apple TV ecosystem:
+  https://github.com/NSRingo/TV
+This project does not distribute the complete iRingo regional/storefront logic.
+
+Runtime dependency copyrights and full license notices for bundled npm packages
+are generated into plugin/scripts/LICENSES.txt on every build. Dependencies
+include NanoCat utilities/URL helpers and crypto-js; their copyrights remain with
+their respective owners.
+
+To make builds possible without a GitHub Packages credential, the actual utility
+and URL source packages used in the working integration are vendored in vendor/:
+  @nsnanocat/util — package metadata version 1.8.9 — Apache-2.0
+    https://github.com/NSNanoCat/util
+  @nsnanocat/url — package metadata version 1.2.4 — Apache-2.0
+    https://github.com/NSNanoCat/url
+Their source, original package metadata and license notices are included.
+
+Project modifications include Apple-focused Loon rules, manual subtitle tracks,
+Gemini cue-preserving translation, local caching/concurrency coordination,
+live-caption exclusion, Apple playback metadata bridging, and an optional
+self-hosted SubDL/Gemini subtitle gateway with CC-based timing calibration.
+The source files under src/ represent a modified downstream version of Universal.
+
+The independent Python gateway under server/ is Copyright 2026 JerseyRiver,
+licensed under Apache-2.0, with its license in server/LICENSE. Its MITM/HLS
+integration does not grant rights to copyrighted films or third-party subtitles.

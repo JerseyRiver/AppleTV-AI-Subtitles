@@ -1,0 +1,24 @@
+[Unit]
+Description=AppleTV AI Subtitles Gateway by JerseyRiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=apple-subtitles
+Group=apple-subtitles
+EnvironmentFile=/etc/apple-subtitles.env
+ExecStart=/usr/bin/python3 /opt/apple-subtitles/app.py
+WorkingDirectory=/opt/apple-subtitles
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/apple-subtitles
+MemoryMax=320M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

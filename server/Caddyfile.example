@@ -1,0 +1,5 @@
+# Replace this example hostname with your own domain.
+# Standard Caddy automatic HTTPS needs access to its validation ports.
+subtitles.example.com {
+    reverse_proxy 127.0.0.1:8765
+}
