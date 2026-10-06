@@ -2,7 +2,7 @@
 
 给 Apple TV App 补上中文字幕的 **Loon 插件 + 可选自建字幕网关**。由 JerseyRiver 整理和维护，基于 DualSubs 修改，与 Codex 协作开发。不是 Apple、DualSubs 或 iRingo 官方项目。
 
-最初为缺少中文字幕的电影做的实用工具。macOS 和 iPhone 上已做过个人实测，但不同影片、地区、系统和播放器行为仍可能不同；这是实验性项目，**不承诺所有影片都可用或逐句精准**。
+最初为缺少中文字幕的电影做的实用工具。此前个人版的播放与字幕路径在 macOS 和 iPhone 上做过实测；公开版改为从 Loon 参数读取 API Key 后，目前通过了参数传递与模拟 API 请求测试，**尚未完成真实 Loon 上的参数输入 → Gemini 请求端到端验证**。不同影片、地区、系统和播放器行为仍可能不同；这是实验性项目，**不承诺所有影片都可用或逐句精准**。
 
 ## 能做什么
 
@@ -14,7 +14,11 @@
 
 ## 安装 Loon 插件
 
-[插件下载/订阅地址](https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/AppleTV.AI.Subtitles.plugin)
+复制下面的完整 URL，作为 Loon 的插件订阅地址（代码框右上角可一键复制）：
+
+```text
+https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/AppleTV.AI.Subtitles.plugin
+```
 
 1. 在 Loon 的插件管理中，通过 URL 添加上面的地址。此插件会自动下载仓库中的 JS，不需要单独放置 JS 文件。
 2. 按 Loon 的要求启用相关脚本、重写和 MITM，并安装及信任其证书。MITM 会让 Loon 处理这些域名的 HTTPS 内容，请理解其风险。
