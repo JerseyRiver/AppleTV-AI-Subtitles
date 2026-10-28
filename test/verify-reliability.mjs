@@ -5,6 +5,7 @@ import MD5 from 'crypto-js/md5.js';
 import M3U8 from '../src/EXTM3U/EXTM3U.mjs';
 import SubtitleCache from '../src/function/subtitleCache.mjs';
 import selectHighestQuality from '../src/function/selectHighestQuality.mjs';
+import Retranslate from '../src/function/retranslate.mjs';
 
 const translate = fs.readFileSync('plugin/scripts/Translate.response.bundle.js', 'utf8');
 const manifest = fs.readFileSync('plugin/scripts/Manifest.response.bundle.js', 'utf8');
@@ -13,7 +14,7 @@ const entries = storage => {
   const value = JSON.parse(storage.get('DualSubs') || '{}').Translate?.Caches?.Subtitles || [];
   return new Map(typeof value === 'string' ? JSON.parse(value) : value);
 };
-async function simulate(bundle, body, { storage = new Map(), model, argument = {}, mode = 'translate', clock = { now: Date.now() }, headers = { 'User-Agent': 'com.apple.tv/1.0 iOS/27.0.1 model/iPad13,8' } } = {}) {
+async function simulate(bundle, body, { storage = new Map(), model, argument = {}, mode = 'translate', requestURL, clock = { now: Date.now() }, headers = { 'User-Agent': 'com.apple.tv/1.0 iOS/27.0.1 model/iPad13,8' } } = {}) {
   class ClockDate extends Date { static now() { return clock.now; } }
   let finish, count = 0;
   const requests = [];
@@ -30,7 +31,7 @@ async function simulate(bundle, body, { storage = new Map(), model, argument = {
   };
   const context = vm.createContext({ console: { log() {}, error() {}, warn() {} }, setTimeout, clearTimeout, URL, Date: ClockDate, crypto: globalThis.crypto,
     $loon: {}, $script: { startTime: clock.now },
-    $request: { url: mode === 'manifest' ? 'https://play-edge.itunes.apple.com/WebObjects/MZPlayLocal.woa/hls/subscription/playlist.m3u8?a=1234567890' : 'https://vod-ap-aoc.tv.apple.com/movie.webvtt?subtype=Translate&lang=EN&tlang=ZH', headers },
+    $request: { url: requestURL || (mode === 'manifest' ? 'https://play-edge.itunes.apple.com/WebObjects/MZPlayLocal.woa/hls/subscription/playlist.m3u8?a=1234567890' : 'https://vod-ap-aoc.tv.apple.com/movie.webvtt?subtype=Translate&lang=EN&tlang=ZH'), headers },
     $response: { headers: { 'Content-Type': mode === 'manifest' ? 'application/vnd.apple.mpegurl' : 'text/vtt' }, body },
     $argument: { Vendor: 'Gemini', GeminiAPIKey: 'mock-key', GeminiModel: 'gemini-3.5-flash-lite', GeminiBatchSize: '400', 'Languages[0]': 'EN', 'Languages[1]': 'ZH', ShowOnly: 'true', Position: 'Reverse', Types: 'Official,Translate', GatewayURL: '', HighestQuality: false, LogLevel: 'ERROR', ...argument },
     $persistentStore: { read: key => storage.get(key) || null, write: (value, key) => (storage.set(key, value), true) },
@@ -124,3 +125,60 @@ assert.ok(registration.requests[0].timeout <= 2000);
 assert.equal(registrationAgain.count, 0);
 assert.match(registrationAgain.output.headers['X-DualSubs-External-Sync'], /registered-cached/);
 console.log('Reliability fixes passed: blank/legacy caches, text identity, total deadline, resume, LRU/bytes, short-cue isolation, idempotency, audio languages and reference deduplication.');
+
+const retryStore = new Map();
+const filmURL = id => `https://vod-ap-aoc.tv.apple.com/movie.webvtt?subtype=Translate&lang=EN&tlang=ZH&dsfilm=apple:${id}`;
+const filmA = filmURL('1234567890'), filmB = filmURL('2234567890');
+const oldMovie = await simulate(translate, two, { storage: retryStore, requestURL: filmA, model: input => ({ translations: input.map(item => ({ id: item.id, text: '完整但错误的旧译文' })) }) });
+await simulate(translate, cue('Another movie'), { storage: retryStore, requestURL: filmB });
+const oldKeys = [...entries(retryStore).keys()];
+const retryArgument = { RetranslateNext: true, RetranslateRequest: '1' };
+const prepared = await simulate(manifest, master, { storage: retryStore, mode: 'manifest', argument: retryArgument });
+assert.equal(prepared.count, 0, 'Preparing retry called an API without subtitle selection');
+const trackURI = M3U8.parse(prepared.output.body).find(x => /[?&]subtype=Translate/.test(x.OPTION?.URI || '')).OPTION.URI;
+const retryToken = new URL(trackURI, 'https://example.com/').searchParams.get('dsretry');
+assert.match(retryToken, /^[a-f0-9]{32}$/);
+assert.match(trackURI, /dsfilm=apple%3A1234567890/);
+const segmentManifest = await simulate(manifest, '#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nmovie.webvtt?signature=keep%2Bthis\n#EXT-X-ENDLIST\n', { storage: retryStore, mode: 'manifest', argument: retryArgument, requestURL: `https://vod-ap-aoc.tv.apple.com/movie_subtitles.m3u8?subtype=Translate&lang=EN&dsfilm=apple%3A1234567890&dsretry=${retryToken}` });
+assert.match(segmentManifest.output.body, /signature=keep%2Bthis/);
+assert.match(segmentManifest.output.body, /dsfilm=apple%3A1234567890/);
+assert.match(segmentManifest.output.body, new RegExp(`dsretry=${retryToken}`));
+const fresh = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: retryArgument });
+assert.equal(fresh.count, 2, 'Retry reused old complete/partial translation');
+assert.doesNotMatch(fresh.output.body, /错误的旧译文/);
+assert.ok(!entries(retryStore).has(oldKeys[0]), 'Invalid old movie cache was retained');
+assert.ok(entries(retryStore).has(oldKeys[1]), 'Another movie cache was removed');
+const freshReplay = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: retryArgument });
+assert.equal(freshReplay.count, 0, 'Leaving retry switch on retriggered translation');
+const nextMovie = await simulate(translate, cue('Another movie'), { storage: retryStore, requestURL: filmB, argument: retryArgument });
+assert.equal(nextMovie.count, 0, 'Next movie was accidentally retried');
+const afterOff = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: { RetranslateNext: false } });
+assert.equal(afterOff.count, 0, 'Turning retry off restored the invalid old cache');
+const secondRetry = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: { RetranslateNext: true, RetranslateRequest: '2' } });
+assert.equal(secondRetry.count, 2);
+const thirdRetry = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: { RetranslateNext: true, RetranslateRequest: '3' } });
+assert.equal(thirdRetry.count, 2, 'New request number did not rearm without an observed off');
+const finalReplay = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: { RetranslateNext: false } });
+assert.equal(finalReplay.count, 0);
+
+const pendingRetry = await simulate(translate, two, { requestURL: filmA, model: (input, n) => n === 2 ? { error: 429 } : { translations: input.map(item => ({ id: item.id, text: '旧的中间进度' })) } });
+pendingRetry.clock.now += 61000;
+const discardedProgress = await simulate(translate, two, { storage: pendingRetry.storage, clock: pendingRetry.clock, requestURL: filmA, argument: retryArgument });
+assert.equal(discardedProgress.count, 2, 'Explicit retry reused unwanted partial progress');
+assert.doesNotMatch(discardedProgress.output.body, /旧的中间进度/);
+assert.match(discardedProgress.output.headers['X-DualSubs-Gemini-Progress'], /resumed=0/);
+
+const externalRetry = await simulate(manifest, cc, { storage: refStore, mode: 'manifest', argument: { GatewayURL: 'https://subtitles.example.com/v1/test-token', ...retryArgument } });
+const externalURI = M3U8.parse(externalRetry.output.body).find(x => x.OPTION?.NAME === '外部中文字幕').OPTION.URI;
+const externalToken = new URL(externalURI).searchParams.get('retry');
+assert.match(externalToken, /^[a-f0-9]{32}$/);
+assert.equal(externalRetry.count, 0, 'Preparing external retry triggered subtitle processing');
+const externalReplay = await simulate(manifest, cc, { storage: refStore, mode: 'manifest', argument: { GatewayURL: 'https://subtitles.example.com/v1/test-token', ...retryArgument } });
+assert.ok(externalReplay.output.body.includes(`retry=${externalToken}`), 'Repeated master changed server retry token');
+const externalReprocessed = await simulate(manifest, externalRetry.output.body, { storage: refStore, mode: 'manifest', argument: { GatewayURL: 'https://subtitles.example.com/v1/test-token', RetranslateNext: true, RetranslateRequest: '2' } });
+const reprocessedTracks = M3U8.parse(externalReprocessed.output.body).filter(x => x.OPTION?.NAME === '外部中文字幕');
+assert.equal(reprocessedTracks.length, 1, 'External retry duplicated a generated track');
+assert.notEqual(new URL(reprocessedTracks[0].OPTION.URI).searchParams.get('retry'), externalToken, 'Reprocessed external master ignored a new retry action');
+const failedStore = { getItem: () => ({}), setItem: () => false };
+assert.throws(() => new Retranslate(failedStore, true), /保存失败/);
+console.log('One-shot retry passed: film isolation, master/segment propagation, no pre-selection API, fresh complete/partial cache, off persistence, request-number rearm, server token stability and failed-write safety.');

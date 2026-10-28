@@ -31,7 +31,7 @@ from statistics import median
 from typing import Any
 
 
-APP_VERSION = "0.11.2"
+APP_VERSION = "0.11.3"
 ALIGNMENT_VERSION = 6
 APPLE_MEDIA_TIME_OFFSET_MS = 10_000
 PARAGRAPH_GAP_MS = 900
@@ -132,10 +132,14 @@ class MediaRequest:
     episode: int | None
     discontinuity_sequence: int
     frame_rate: float | None = None
+    retry_token: str = ""
 
     @classmethod
     def from_query(cls, asset_id: str, query: dict[str, list[str]]) -> "MediaRequest":
         title = first(query, "title").strip()
+        retry_token = first(query, "retry")
+        if retry_token and not re.fullmatch(r"[a-f0-9]{32}", retry_token):
+            raise GatewayError("invalid retry token", HTTPStatus.BAD_REQUEST)
         if not re.fullmatch(r"\d{4,20}", asset_id):
             raise GatewayError("invalid asset id", HTTPStatus.BAD_REQUEST)
         if not title or len(title) > 180:
@@ -154,6 +158,7 @@ class MediaRequest:
             episode=parse_int(first(query, "episode"), 1, 9999),
             discontinuity_sequence=parse_int(first(query, "discontinuity"), 0, 100) or 0,
             frame_rate=parse_float(first(query, "frame_rate"), 15.0, 120.0),
+            retry_token=retry_token,
         )
 
 
@@ -1143,7 +1148,12 @@ class SubtitleGateway:
 
     def get_vtt(self, media: MediaRequest) -> tuple[str, str]:
         target = self.cache_path(media)
-        if target.exists() and target.stat().st_size > 20 and not self.should_align_cached(media):
+        retry_token = getattr(media, "retry_token", "")
+        def retry_pending(metadata: dict[str, Any]) -> bool:
+            handled = metadata.get("retry_tokens")
+            return bool(retry_token and (not isinstance(handled, list) or retry_token not in handled))
+
+        if target.exists() and target.stat().st_size > 20 and not retry_pending(self.read_metadata(media)) and not self.should_align_cached(media):
             os.utime(target, None)
             return self.prepare_vtt(target.read_text(encoding="utf-8")), "cache"
 
@@ -1151,22 +1161,24 @@ class SubtitleGateway:
         lock_path = target.parent / ".lock"
         with lock_path.open("a+b") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            if target.exists() and target.stat().st_size > 20:
+            previous_metadata = self.read_metadata(media)
+            if target.exists() and target.stat().st_size > 20 and not retry_pending(previous_metadata):
                 if self.should_align_cached(media):
                     self.maybe_align_cached(media, target)
                 os.utime(target, None)
                 return self.prepare_vtt(target.read_text(encoding="utf-8")), "cache-wait"
 
-            previous_metadata = self.read_metadata(media)
             cues, source, alignment_reference, precomputed_alignment, selection = self.resolve(
                 media,
                 str(previous_metadata.get("source") or ""),
             )
-            original = target.parent / "unaligned.vtt"
-            atomic_write(original, render_vtt(cues))
+            original_rendered = render_vtt(cues)
             alignment = self.align_cues(media, cues, alignment_reference, precomputed_alignment)
             rendered = render_vtt(cues)
+            atomic_write(target.parent / "unaligned.vtt", original_rendered)
             atomic_write(target, rendered)
+            handled_tokens = previous_metadata.get("retry_tokens")
+            handled_tokens = [token for token in handled_tokens if isinstance(token, str) and re.fullmatch(r"[a-f0-9]{32}", token)] if isinstance(handled_tokens, list) else []
             metadata = {
                 "asset_id": media.asset_id,
                 "title": media.title,
@@ -1180,6 +1192,7 @@ class SubtitleGateway:
                 "cues": len(cues),
                 "created_at": int(time.time()),
                 "alignment": {**alignment, "attempted_at": int(time.time())},
+                "retry_tokens": list(dict.fromkeys([*handled_tokens, *([retry_token] if retry_token else [])])),
             }
             atomic_write(self.metadata_path(media), json.dumps(metadata, ensure_ascii=False, indent=2))
             self.prune_cache()

@@ -5,6 +5,8 @@ const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
 assert.match(plugin, /GeminiAPIKey = input,""/);
 assert.match(plugin, /GatewayURL = input,""/);
 assert.match(plugin, /HighestQuality = switch,false/);
+assert.match(plugin, /RetranslateNext = switch,false/);
+assert.match(plugin, /RetranslateRequest = input,"1"/);
 assert.match(plugin, /#!author = JerseyRiver/);
 assert.doesNotMatch(plugin, /#!icon/);
 for (const line of plugin.split('\n').filter(line => line.startsWith('http-response '))) {
@@ -16,6 +18,7 @@ for (const line of plugin.split('\n').filter(line => line.startsWith('http-respo
   }
   if (file === 'Manifest.response.bundle.js') assert.ok(line.includes('{HighestQuality}') && resource.includes('v=' + version), 'Quality toggle or cache version not forwarded');
   if (file === 'Translate.response.bundle.js') assert.ok(line.includes('{SubtitleCacheSize}') && line.includes('{SubtitleCacheMB}'), 'Cache configuration not forwarded');
+  if (file === 'Manifest.response.bundle.js' || file === 'Translate.response.bundle.js') assert.ok(line.includes('{RetranslateNext}') && line.includes('{RetranslateRequest}'), 'Retry controls not forwarded');
   assert.ok(/apple\\\.com/.test(line), 'Rule outside Apple scope');
 }
 console.log('Public plugin paths, branding, Apple scope and configuration passed.');

@@ -7,6 +7,7 @@ import setENV from "./function/setENV.mjs";
 import detectFormat from "./function/detectFormat.mjs";
 import Translate from "./class/Translate.mjs";
 import SubtitleCache, { hasText, validTranslation } from "./function/subtitleCache.mjs";
+import Retranslate, { filmFromURL } from "./function/retranslate.mjs";
 
 const IN_FLIGHT_KEY = "AppleTVAI.Translate.InFlight.v2";
 const CACHE_REVISION = "cue-text-v1";
@@ -50,13 +51,20 @@ if (format === "application/octet-stream" || format === "text/plain") format = d
 	const fullText = body.body.map(item => (item?.text ?? "").replace(/<\/?[^<>]+>/g, ""));
 	if (!fullText.some(hasText)) return;
 	const identity = `${Settings.Vendor}|${Settings.Gemini.Model ?? ""}|${languages.join("|")}`;
-	const cacheKey = MD5(JSON.stringify([CACHE_REVISION, PROMPT_REVISION, identity, fullText])).toString();
+	const baseKey = MD5(JSON.stringify([CACHE_REVISION, PROMPT_REVISION, identity, fullText])).toString();
 	const oldKey = MD5(`${identity}|${$response.body}`).toString();
-	const legacyKeys = [MD5(`${PROMPT_REVISION}|${oldKey}`).toString()];
+	const oldAliases = [MD5(`${PROMPT_REVISION}|${oldKey}`).toString()];
+	const retry = new Retranslate(Storage, argumentValue("RetranslateNext"), argumentValue("RetranslateRequest"));
+	const film = filmFromURL(url);
+	const generation = retry.select(film);
+	const cacheKey = generation ? MD5(`${baseKey}|retry:${generation}`).toString() : baseKey;
+	const legacyKeys = generation ? [] : oldAliases;
 	const cache = new SubtitleCache(Storage, {
 		limit: argumentValue("SubtitleCacheSize") || Settings.SubtitleCacheSize || 100,
 		maxBytes: Math.max(1, Math.min(64, Number(argumentValue("SubtitleCacheMB") || Settings.SubtitleCacheMB || 12))) * 1024 * 1024,
 	});
+	cache.prepareFilm(film, generation, cacheKey, legacyKeys, [baseKey, ...oldAliases]);
+	if (generation) $response.headers["X-AppleTV-Retranslate"] = "selected-film";
 	const quotaKey = `AppleTVAI.Translate.Quota.${MD5(credential || "missing").toString()}`;
 	const contentCooldownKey = `${quotaKey}.${cacheKey}`;
 	$response.headers["X-DualSubs-Gemini-Cache-Revision"] = CACHE_REVISION;

@@ -10,6 +10,7 @@ import detectPlaylist from "./function/detectPlaylist.mjs";
 import setCache from "./function/setCache.mjs";
 import aPath from "./function/aPath.mjs";
 import selectHighestQuality from "./function/selectHighestQuality.mjs";
+import Retranslate, { filmFromURL } from "./function/retranslate.mjs";
 
 // Modified by JerseyRiver: opt-in gateway configuration, never a private built-in endpoint.
 const EXTERNAL_SUBTITLE_BASE_URL = configuredGatewayURL();
@@ -35,6 +36,7 @@ Console.info(`PLATFORM: ${PLATFORM}`);
 	 */
 	const { Settings, Caches, Configs } = setENV("DualSubs", [["YouTube", "Netflix", "BiliBili", "Spotify"].includes(PLATFORM) ? PLATFORM : "Universal", "Composite"], database);
 	Console.logLevel = Settings.LogLevel;
+	const retry = PLATFORM === "Apple" ? new Retranslate(Storage, $argument?.RetranslateNext, $argument?.RetranslateRequest) : null;
 	// 创建属性列表
 	const attrList = new AttrList(FORMAT, PLATFORM);
 	// 获取字幕类型与语言
@@ -71,9 +73,18 @@ Console.info(`PLATFORM: ${PLATFORM}`);
 					playlistCache[Languages[1]] = attrList.get($request.url, body, "SUBTITLES", Configs.Languages[Languages[1]]);
 					// 写入选项
 					body = attrList.set(body, playlistCache, Settings.Types, Languages, STANDARD, DEVICE);
+					if (retry) {
+						const tracks = body.filter(item => item?.OPTION?.TYPE === "SUBTITLES" && /[?&]subtype=Translate(?:&|$)/.test(item.OPTION.URI || ""));
+						const film = filmFromURL(url, tracks[0]?.OPTION.URI);
+						const token = retry.select(film, tracks.length > 0);
+						for (const track of tracks) {
+							track.OPTION.URI = replaceQueryParameter(track.OPTION.URI, "dsfilm", film);
+							if (token) track.OPTION.URI = replaceQueryParameter(track.OPTION.URI, "dsretry", token);
+						}
+					}
 					// CC-only titles have no downloadable dialogue subtitle for Gemini. Add a
 					// manual external Chinese track backed by the user's optional gateway.
-					body = await addExternalSubtitleTrack(body, url);
+					body = await addExternalSubtitleTrack(body, url, retry);
 					if (PLATFORM === "Apple") {
 						const enabled = typeof $argument === "object" && $argument && Object.prototype.hasOwnProperty.call($argument, "HighestQuality") ? $argument.HighestQuality : Settings.HighestQuality;
 						const quality = selectHighestQuality(body, enabled);
@@ -126,6 +137,9 @@ Console.info(`PLATFORM: ${PLATFORM}`);
 						if (/^.+\.((web)?vtt|ttml2?|xml|smi)(\?.+)?$/.test(item?.URI)) {
 							if (!isLiveTranslate && !/empty|blank|default/.test(item.URI)) {
 								item.URI = subtitleURI(item.URI, Type, url.searchParams?.get("lang"));
+								if (PLATFORM === "Apple" && Type === "Translate") {
+									for (const name of ["dsfilm", "dsretry"]) if (url.searchParams?.get(name)) item.URI = replaceQueryParameter(item.URI, name, url.searchParams.get(name));
+								}
 							}
 							if (item.TAG === "#EXT-X-BYTERANGE")
 								body[i - 1].URI = item.URI; // 删除BYTERANGE
@@ -240,7 +254,7 @@ function getPlaylistCache(url, cache, language) {
  * Add a manual external Chinese subtitle rendition only when the title has
  * closed captions/forced text but no normal downloadable subtitle rendition.
  */
-async function addExternalSubtitleTrack(body, url) {
+async function addExternalSubtitleTrack(body, url, retry) {
 	if (!EXTERNAL_SUBTITLE_BASE_URL.startsWith("https://")) return body;
 	const media = body.filter(item => item?.TAG === "#EXT-X-MEDIA");
 	const subtitles = media.filter(item => item?.OPTION?.TYPE === "SUBTITLES");
@@ -259,7 +273,8 @@ async function addExternalSubtitleTrack(body, url) {
 	const discontinuitySequence = mainAssetDiscontinuitySequence(body, assetId);
 	const frameRate = mainAssetFrameRate(body, assetId);
 	await registerAppleReference(body, url, assetId);
-	const endpoint = externalPlaylistURL(assetId, metadata, discontinuitySequence, frameRate);
+	const token = retry?.select(`apple:${assetId}`) || "";
+	const endpoint = externalPlaylistURL(assetId, metadata, discontinuitySequence, frameRate, token);
 	const stableId = `ds${assetId.slice(-7)}v110`;
 	const templates = [];
 	const seenGroups = new Set();
@@ -374,6 +389,14 @@ function subtitleURI(uri, type, language) {
 	return `${path}?${fields.join("&")}`;
 }
 
+function replaceQueryParameter(uri, key, value) {
+	const position = uri.indexOf("?");
+	const path = position < 0 ? uri : uri.slice(0, position);
+	const fields = position < 0 ? [] : uri.slice(position + 1).split("&").filter(field => field.split("=", 1)[0] !== key);
+	fields.push(`${key}=${encodeURIComponent(value)}`);
+	return `${path}?${fields.join("&")}`;
+}
+
 function configuredGatewayURL() {
 	let value = typeof $argument === "object" && $argument ? $argument.GatewayURL : "";
 	if (typeof $argument === "string") {
@@ -459,7 +482,7 @@ function queryValue(uri, key) {
 	return undefined;
 }
 
-function externalPlaylistURL(assetId, metadata, discontinuitySequence = 0, frameRate) {
+function externalPlaylistURL(assetId, metadata, discontinuitySequence = 0, frameRate, retryToken = "") {
 	const params = [
 		["title", metadata.title],
 		["year", metadata.year],
@@ -470,6 +493,8 @@ function externalPlaylistURL(assetId, metadata, discontinuitySequence = 0, frame
 		["discontinuity", discontinuitySequence],
 		["frame_rate", frameRate],
 		["gateway_version", EXTERNAL_SUBTITLE_GATEWAY_VERSION],
+		["retry", retryToken],
+		["subtype", "External"],
 	]
 		.filter(([, value]) => value !== undefined && value !== null && value !== "")
 		.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)

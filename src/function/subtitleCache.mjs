@@ -2,6 +2,7 @@
 const CACHE = "@DualSubs.Translate.Caches.Subtitles";
 const ACCESS = "AppleTVAI.SubtitleAccess.v1";
 const PROGRESS = "AppleTVAI.SubtitleProgress.v1";
+const FILMS = "AppleTVAI.SubtitleFilmKeys.v1";
 const DAY = 86400000;
 
 export const hasText = value => typeof value === "string" && value.replace(/[\s\u200b-\u200d\ufeff]/g, "").length > 0;
@@ -33,6 +34,25 @@ export default class SubtitleCache {
 		let value = this.store.getItem(CACHE, []);
 		try { if (typeof value === "string") value = JSON.parse(value); } catch { value = []; }
 		try { return value instanceof Map ? new Map(value) : new Map(Array.isArray(value) ? value : []); } catch { return new Map(); }
+	}
+	prepareFilm(film, generation, key, aliases = [], retired = []) {
+		const index = object(this.store.getItem(FILMS, {}));
+		const previous = object(index[film]);
+		const keys = Array.isArray(previous.keys) ? previous.keys.filter(value => typeof value === "string") : [];
+		if (previous.generation === generation && [key, ...aliases].every(id => keys.includes(id))) return;
+		if (generation) {
+			const changed = previous.generation !== generation;
+			const invalid = new Set([...(changed ? keys : []), ...retired]);
+			const cache = this.readMap();
+			const progress = object(this.store.getItem(PROGRESS, {}));
+			const access = object(this.store.getItem(ACCESS, {}));
+			access.entries = object(access.entries);
+			for (const id of invalid) { cache.delete(id); delete progress[id]; delete access.entries[id]; }
+			if (!this.store.setItem(CACHE, [...cache]) || !this.store.setItem(PROGRESS, progress) || !this.store.setItem(ACCESS, access)) throw new Error("旧字幕缓存清理失败；未执行重译");
+			if (changed) keys.length = 0;
+		}
+		index[film] = { generation, keys: [...new Set([...keys, key, ...aliases])], updatedAt: Date.now() };
+		if (!this.store.setItem(FILMS, index) && generation) throw new Error("字幕缓存索引保存失败");
 	}
 	get(key, source, aliases = []) {
 		const cache = this.readMap();

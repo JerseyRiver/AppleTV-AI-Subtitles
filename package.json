@@ -1,6 +1,6 @@
 {
   "name": "appletv-ai-subtitles",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "Apple TV subtitles for Loon: Gemini translation and an optional self-hosted subtitle gateway",
