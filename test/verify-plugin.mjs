@@ -8,7 +8,8 @@ assert.match(plugin, /HighestQuality = switch,false/);
 assert.match(plugin, /RetranslateNext = switch,false/);
 assert.match(plugin, /RetranslateRequest = input,"1"/);
 assert.match(plugin, /#!author = JerseyRiver/);
-assert.doesNotMatch(plugin, /#!icon/);
+assert.match(plugin, /#!icon = https:\/\/raw\.githubusercontent\.com\/JerseyRiver\/AppleTV-AI-Subtitles\/main\/assets\/icon\.png/);
+assert.ok(fs.existsSync('assets/icon.png'), 'Missing plugin icon');
 for (const line of plugin.split('\n').filter(line => line.startsWith('http-response '))) {
   const resource = line.match(/script-path=https:\/\/raw\.githubusercontent\.com\/JerseyRiver\/AppleTV-AI-Subtitles\/main\/plugin\/scripts\/([^,\s]+)/)?.[1];
   const file = resource?.split('?')[0];
