@@ -9,6 +9,7 @@ import isStandard from "./function/isStandard.mjs";
 import detectPlaylist from "./function/detectPlaylist.mjs";
 import setCache from "./function/setCache.mjs";
 import aPath from "./function/aPath.mjs";
+import selectHighestQuality from "./function/selectHighestQuality.mjs";
 
 // Modified by JerseyRiver: opt-in gateway configuration, never a private built-in endpoint.
 const EXTERNAL_SUBTITLE_BASE_URL = configuredGatewayURL();
@@ -73,6 +74,14 @@ Console.info(`PLATFORM: ${PLATFORM}`);
 					// CC-only titles have no downloadable dialogue subtitle for Gemini. Add a
 					// manual external Chinese track backed by the user's optional gateway.
 					body = await addExternalSubtitleTrack(body, url);
+					if (PLATFORM === "Apple") {
+						const enabled = typeof $argument === "object" && $argument && Object.prototype.hasOwnProperty.call($argument, "HighestQuality") ? $argument.HighestQuality : Settings.HighestQuality;
+						const quality = selectHighestQuality(body, enabled);
+						body = quality.body;
+						if (quality.state !== "off") {
+							$response.headers["X-AppleTV-Quality"] = quality.state === "locked" ? `${quality.resolution}; ${quality.video}; audio=${quality.audio}; variants=${quality.before}->${quality.after}; average=${quality.averageBandwidth}` : quality.state;
+						}
+					}
 					// 写入数据
 					Caches.Playlists.Master.set($request.url, playlistCache);
 					// 格式化缓存

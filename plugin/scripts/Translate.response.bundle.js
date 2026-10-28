@@ -1,4 +1,4 @@
-/*! AppleTV AI Subtitles v1.0.0 — JerseyRiver
+/*! AppleTV AI Subtitles v1.1.0 — JerseyRiver
  * Modified from DualSubs Universal by VirgilClyne and contributors.
  * Combined plugin: GPL-3.0-only; upstream Apache-2.0 and dependency licenses preserved.
  * Source and NOTICE: https://github.com/JerseyRiver/AppleTV-AI-Subtitles

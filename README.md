@@ -39,6 +39,14 @@ https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/plugin/A
 
 不要同时启用旧的本地版或重复匹配的 DualSubs/iRingo 播放改写规则，以免彼此覆盖。支持范围是 Loon 中的 Apple TV App 使用场景，不是 tvOS 电视盒子上的独立安装程序。
 
+### 最高画质与音质开关
+
+更新插件后，可在参数页开启 **[播放] 最高画质与音质**，然后退出影片重新进入。默认关闭，保持 Apple 原来的自动选择。
+
+开启后，插件会筛选播放列表中最高分辨率的视频，同分辨率优先杜比视界/HDR，再保留高码率版本；音频优先全景声等高规格格式，保留相应语言选项和多个 CDN。它只筛选 Apple 已提供的版本，不修改分辨率标签、加密、片段时间或播放地址来伪造画质。`X-AppleTV-Quality` 响应头可用于核对筛选目标，实际播放结果仍需结合下载的片段判断。
+
+最高规格需要网络、设备及当前输出链路支持；开启后没有低清晰度回退，若发生缓冲或播放失败，可关闭开关恢复自动选择。
+
 ## 部署服务器：外部字幕模式
 
 **[进入服务器部署教程 →](server/README.md)** · [查看服务器源码](server/app.py) · [配置示例](server/apple-subtitles.env.example)

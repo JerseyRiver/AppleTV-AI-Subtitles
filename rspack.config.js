@@ -27,7 +27,7 @@ export default defineConfig({
   output: { chunkFormat: false, filename: '[name].bundle.js', library: { type: 'module' } },
   plugins: [
     new NodePolyfillPlugin(),
-    new rspack.BannerPlugin({ banner: 'AppleTV AI Subtitles v1.0.0 — JerseyRiver\nModified from DualSubs Universal (VirgilClyne). GPL-3.0-only combined distribution.\nSource: https://github.com/JerseyRiver/AppleTV-AI-Subtitles\nThird-party licenses: plugin/scripts/LICENSES.txt and NOTICE in that repository.' }),
+    new rspack.BannerPlugin({ banner: 'AppleTV AI Subtitles v1.1.0 — JerseyRiver\nModified from DualSubs Universal (VirgilClyne). GPL-3.0-only combined distribution.\nSource: https://github.com/JerseyRiver/AppleTV-AI-Subtitles\nThird-party licenses: plugin/scripts/LICENSES.txt and NOTICE in that repository.' }),
     new SaveModuleNames(),
   ],
   devtool: false,
