@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 
 const licenses = new Map();
 function visit(module) {
@@ -22,7 +23,7 @@ const text = ownLicenses.map(file => `=== ${file} ===\n${fs.readFileSync(file, '
 fs.mkdirSync('plugin/scripts', { recursive: true });
 fs.writeFileSync('plugin/scripts/LICENSES.txt', text);
 for (const file of fs.readdirSync('dist').filter(name => name.endsWith('.bundle.js'))) {
-  const header = '/*! AppleTV AI Subtitles v1.1.0 — JerseyRiver\n' +
+  const header = `/*! AppleTV AI Subtitles v${pkg.version} — JerseyRiver\n` +
     ' * Modified from DualSubs Universal by VirgilClyne and contributors.\n' +
     ' * Combined plugin: GPL-3.0-only; upstream Apache-2.0 and dependency licenses preserved.\n' +
     ' * Source and NOTICE: https://github.com/JerseyRiver/AppleTV-AI-Subtitles\n' +

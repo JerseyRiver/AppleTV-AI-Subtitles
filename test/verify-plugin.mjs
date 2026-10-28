@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 const plugin = fs.readFileSync('plugin/AppleTV.AI.Subtitles.plugin', 'utf8');
+const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
 assert.match(plugin, /GeminiAPIKey = input,""/);
 assert.match(plugin, /GatewayURL = input,""/);
 assert.match(plugin, /HighestQuality = switch,false/);
@@ -13,7 +14,8 @@ for (const line of plugin.split('\n').filter(line => line.startsWith('http-respo
   if (file.endsWith('.bundle.js')) {
     assert.ok(line.includes('{GeminiAPIKey}') && line.includes('{GatewayURL}'), 'Config not forwarded');
   }
-  if (file === 'Manifest.response.bundle.js') assert.ok(line.includes('{HighestQuality}') && resource.includes('v=1.1.0'), 'Quality toggle or cache version not forwarded');
+  if (file === 'Manifest.response.bundle.js') assert.ok(line.includes('{HighestQuality}') && resource.includes('v=' + version), 'Quality toggle or cache version not forwarded');
+  if (file === 'Translate.response.bundle.js') assert.ok(line.includes('{SubtitleCacheSize}') && line.includes('{SubtitleCacheMB}'), 'Cache configuration not forwarded');
   assert.ok(/apple\\\.com/.test(line), 'Rule outside Apple scope');
 }
 console.log('Public plugin paths, branding, Apple scope and configuration passed.');

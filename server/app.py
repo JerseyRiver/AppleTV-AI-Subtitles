@@ -31,7 +31,7 @@ from statistics import median
 from typing import Any
 
 
-APP_VERSION = "0.11.1"
+APP_VERSION = "0.11.2"
 ALIGNMENT_VERSION = 6
 APPLE_MEDIA_TIME_OFFSET_MS = 10_000
 PARAGRAPH_GAP_MS = 900
@@ -786,11 +786,39 @@ def undo_legacy_alignment(cues: list[Cue], value: dict[str, Any]) -> None:
         cue.end_ms = max(cue.start_ms + 1, round(end_media - APPLE_MEDIA_TIME_OFFSET_MS))
 
 
-def request_bytes(url: str, timeout: int, headers: dict[str, str] | None = None, data: bytes | None = None) -> tuple[bytes, dict[str, str]]:
+def atomic_write(target: Path, value: str | bytes) -> None:
+    """Unique staging files allow concurrent writers without exposing partial data."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = value.encode("utf-8") if isinstance(value, str) else value
+    staging: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False) as output:
+            staging = Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(staging, target)
+    finally:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
+
+
+def request_bytes(url: str, timeout: int, headers: dict[str, str] | None = None, data: bytes | None = None, max_bytes: int = 16_000_000) -> tuple[bytes, dict[str, str]]:
     request = urllib.request.Request(url, data=data, headers=headers or {}, method="POST" if data is not None else "GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read(), dict(response.headers.items())
+            length = str(response.headers.get("Content-Length") or "")
+            if length.isdigit() and int(length) > max_bytes:
+                raise GatewayError("upstream response exceeds download size limit")
+            received = bytearray()
+            while True:
+                chunk = response.read(min(65536, max_bytes + 1 - len(received)))
+                if not chunk:
+                    break
+                received.extend(chunk)
+                if len(received) > max_bytes:
+                    raise GatewayError("upstream response exceeds download size limit")
+            return bytes(received), dict(response.headers.items())
     except urllib.error.HTTPError as error:
         detail = error.read(500).decode("utf-8", errors="replace")
         raise GatewayError(f"upstream HTTP {error.code}: {detail}") from error
@@ -806,7 +834,7 @@ def request_json(url: str, timeout: int, headers: dict[str, str] | None = None, 
     if payload is not None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         merged_headers["Content-Type"] = "application/json"
-    data, _ = request_bytes(url, timeout, merged_headers, body)
+    data, _ = request_bytes(url, timeout, merged_headers, body, max_bytes=4_000_000)
     try:
         return json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -841,9 +869,7 @@ class SubtitleGateway:
         url = canonicalize_apple_url(value)
         target = self.reference_path(asset_id)
         target.parent.mkdir(parents=True, exist_ok=True)
-        temp = target.with_suffix(".tmp")
-        temp.write_text(json.dumps({"url": url, "registered_at": int(time.time())}), encoding="utf-8")
-        os.replace(temp, target)
+        atomic_write(target, json.dumps({"url": url, "registered_at": int(time.time())}))
 
     def read_reference(self, media: MediaRequest) -> str:
         path = self.reference_path(media.asset_id)
@@ -860,7 +886,7 @@ class SubtitleGateway:
         if not playlist_url:
             return []
         headers = {"User-Agent": "AppleCoreMedia/1.0"}
-        data, _ = request_bytes(playlist_url, min(self.config.timeout_seconds, 30), headers)
+        data, _ = request_bytes(playlist_url, min(self.config.timeout_seconds, 30), headers, max_bytes=2_000_000)
         if len(data) > 2_000_000:
             raise GatewayError("Apple media playlist is unexpectedly large")
         lines = data.decode("utf-8", errors="replace").splitlines()
@@ -880,7 +906,7 @@ class SubtitleGateway:
         indexes = sorted({min(len(segments) - 1, max(0, round((len(segments) - 1) * point) + delta)) for point in anchors for delta in (0, 1)})
 
         def fetch_fragment(index: int) -> list[CaptionSample]:
-            fragment, _ = request_bytes(segments[index], min(self.config.timeout_seconds, 25), headers)
+            fragment, _ = request_bytes(segments[index], min(self.config.timeout_seconds, 25), headers, max_bytes=2_500_000)
             if len(fragment) > 2_500_000:
                 return []
             try:
@@ -1137,14 +1163,10 @@ class SubtitleGateway:
                 str(previous_metadata.get("source") or ""),
             )
             original = target.parent / "unaligned.vtt"
-            original_temp = original.with_suffix(".tmp")
-            original_temp.write_text(render_vtt(cues), encoding="utf-8")
-            os.replace(original_temp, original)
+            atomic_write(original, render_vtt(cues))
             alignment = self.align_cues(media, cues, alignment_reference, precomputed_alignment)
             rendered = render_vtt(cues)
-            temp = target.with_suffix(".tmp")
-            temp.write_text(rendered, encoding="utf-8")
-            os.replace(temp, target)
+            atomic_write(target, rendered)
             metadata = {
                 "asset_id": media.asset_id,
                 "title": media.title,
@@ -1159,10 +1181,7 @@ class SubtitleGateway:
                 "created_at": int(time.time()),
                 "alignment": {**alignment, "attempted_at": int(time.time())},
             }
-            self.metadata_path(media).write_text(
-                json.dumps(metadata, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            atomic_write(self.metadata_path(media), json.dumps(metadata, ensure_ascii=False, indent=2))
             self.prune_cache()
             return self.prepare_vtt(rendered), source
 
@@ -1192,22 +1211,17 @@ class SubtitleGateway:
             reference = self.english_alignment_reference(media, identity, str(metadata.get("source") or ""))
             result = self.align_cues(media, cues, reference)
             if not original.exists():
-                original_temp = original.with_suffix(".tmp")
-                original_temp.write_text(render_vtt(cues if result.get("status") != "applied" else parse_subtitle(target.read_bytes(), "subtitle.vtt")), encoding="utf-8")
+                raw_original = render_vtt(cues if result.get("status") != "applied" else parse_subtitle(target.read_bytes(), "subtitle.vtt"))
                 if result.get("status") == "applied":
                     raw_cues = parse_subtitle(target.read_bytes(), "subtitle.vtt")
                     undo_legacy_alignment(raw_cues, previous_alignment)
-                    original_temp.write_text(render_vtt(raw_cues), encoding="utf-8")
-                os.replace(original_temp, original)
+                    raw_original = render_vtt(raw_cues)
+                atomic_write(original, raw_original)
             if result.get("status") == "applied":
-                temp = target.with_suffix(".tmp")
-                temp.write_text(render_vtt(cues), encoding="utf-8")
-                os.replace(temp, target)
+                atomic_write(target, render_vtt(cues))
             metadata["alignment"] = {**result, "attempted_at": int(time.time())}
             meta_target = self.metadata_path(media)
-            meta_temp = meta_target.with_suffix(".tmp")
-            meta_temp.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(meta_temp, meta_target)
+            atomic_write(meta_target, json.dumps(metadata, ensure_ascii=False, indent=2))
         except (GatewayError, OSError, ValueError) as error:
             LOG.info("cached alignment skipped asset=%s error=%s", media.asset_id, error)
 
@@ -1382,18 +1396,8 @@ class SubtitleGateway:
         data, name, label = self.download_candidate(item)
         if len(data) <= 5_000_000:
             directory.mkdir(parents=True, exist_ok=True)
-            # Keep the two atomic-write staging files distinct. Using
-            # with_suffix(".tmp") for both paths collapses
-            # <key>.subtitle and <key>.json into the same <key>.tmp file.
-            data_temp = data_path.with_name(f"{data_path.name}.tmp")
-            metadata_temp = metadata_path.with_name(f"{metadata_path.name}.tmp")
-            data_temp.write_bytes(data)
-            metadata_temp.write_text(
-                json.dumps({"name": name, "label": label}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            os.replace(data_temp, data_path)
-            os.replace(metadata_temp, metadata_path)
+            atomic_write(data_path, data)
+            atomic_write(metadata_path, json.dumps({"name": name, "label": label}, ensure_ascii=False))
         return data, name, label
 
     def download_candidate(self, item: dict[str, Any]) -> tuple[bytes, str, str]:

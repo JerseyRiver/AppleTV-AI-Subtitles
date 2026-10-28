@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from app import CaptionSample, Cue, MediaRequest, SubtitleGateway, VTT_TIMESTAMP_MAP, apply_alignment, authenticated_subdl_url, canonicalize_apple_url, dialogue_prefix_similarity, ensure_vtt_timestamp_map, estimate_alignment, extract_best_from_zip, is_netflix_release, parse_ass, parse_srt_or_vtt, release_frame_rate, releases_compatible, render_vtt, undo_legacy_alignment
+from app import APP_VERSION, CaptionSample, Cue, MediaRequest, SubtitleGateway, VTT_TIMESTAMP_MAP, apply_alignment, authenticated_subdl_url, canonicalize_apple_url, dialogue_prefix_similarity, ensure_vtt_timestamp_map, estimate_alignment, extract_best_from_zip, is_netflix_release, parse_ass, parse_srt_or_vtt, release_frame_rate, releases_compatible, render_vtt, undo_legacy_alignment
 
 
 class SubtitleTests(unittest.TestCase):
@@ -107,7 +107,7 @@ class SubtitleTests(unittest.TestCase):
         gateway = object.__new__(SubtitleGateway)
         media = MediaRequest("6794539309", "Rocketman", 2019, 7334, "movie", None, None, 3)
         playlist = gateway.playlist(media, "title=Rocketman")
-        self.assertIn("subtitle.vtt?title=Rocketman&gateway_version=0.11.1", playlist)
+        self.assertIn(f"subtitle.vtt?title=Rocketman&gateway_version={APP_VERSION}", playlist)
         self.assertIn("#EXT-X-DISCONTINUITY-SEQUENCE:3", playlist)
 
     def test_apple_playback_alias_is_canonicalized(self):

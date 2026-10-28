@@ -1,5 +1,6 @@
 import { Console, fetch } from "@nsnanocat/util";
 import MD5 from "crypto-js/md5.js";
+import { hasText } from "../function/subtitleCache.mjs";
 
 export default class Translate {
 	constructor(options = {}) {
@@ -212,16 +213,28 @@ export default class Translate {
 		const sourceName = languageNames[source] ?? source;
 		const targetName = languageNames[target] ?? target;
 		const thinkingConfig = model.startsWith("gemini-3") ? { thinkingLevel: "minimal" } : { thinkingBudget: 0 };
+		const deadline = Number(api?.Deadline) || Date.now() + 50000;
+		const remaining = (reserve = 0) => {
+			const ms = deadline - Date.now() - reserve;
+			if (ms < 1000) throw new Error("Gemini 翻译总时限已到；已完成进度已保留，请稍后重试");
+			return ms;
+		};
 		const payload = text.map((value, id) => ({ id, text: value }));
 		const indexed = new Map();
+		payload.forEach(item => {
+			const cached = api?.InitialTranslations?.[item.id];
+			if (!hasText(item.text)) indexed.set(item.id, "");
+			else if (hasText(cached)) indexed.set(item.id, cached);
+		});
 		const requestTranslations = async (entries, transportRetries = 1) => {
+			const timeout = Math.min(50000, Math.floor(remaining(750) / 1000) * 1000);
 			const requestStartedAt = Date.now();
 			const entryIds = new Set(entries.map(item => item.id));
 			const entryText = entries.map(item => item.text);
 			const maxOutputTokens = Math.min(49152, Math.max(1024, Math.ceil(entryText.join("").length * 2 + entries.length * 24)));
 			const request = {
 				url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-				timeout: 55000,
+				timeout,
 				headers: {
 					"Content-Type": "application/json",
 					"x-goog-api-key": key,
@@ -266,7 +279,12 @@ export default class Translate {
 				}),
 			};
 			try {
-				const response = await fetch(request);
+				let timer;
+				let response;
+				try {
+					response = await Promise.race([fetch(request), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Gemini 翻译总时限已到；已完成进度已保留，请稍后重试")), Math.min(timeout, remaining())); })]);
+				} finally { clearTimeout(timer); }
+				remaining();
 				const body = JSON.parse(response.body || "{}");
 				if (body?.error) throw new Error(`Gemini API ${body.error.code ?? ""}: ${body.error.message ?? "请求失败"}`);
 				const raw = body?.candidates?.[0]?.content?.parts?.map(part => part?.text ?? "").join("") ?? "";
@@ -281,23 +299,24 @@ export default class Translate {
 				const translations = parsed?.translations;
 				if (Array.isArray(translations)) {
 					translations.forEach(item => {
-						if (Number.isInteger(item?.id) && entryIds.has(item.id) && typeof item?.text === "string" && !indexed.has(item.id)) indexed.set(item.id, item.text);
+						if (Number.isInteger(item?.id) && entryIds.has(item.id) && hasText(item?.text) && !indexed.has(item.id)) indexed.set(item.id, item.text.trim());
 					});
 				}
+				try { api?.OnProgress?.(text.map((_, id) => indexed.get(id) ?? null)); } catch { Console.warn("字幕临时进度保存失败"); }
 			} catch (error) {
 				const message = String(error?.message ?? error);
-				if (transportRetries > 0 && Date.now() - requestStartedAt < 15000 && !/^Gemini API \d+:/i.test(message)) {
+				if (transportRetries > 0 && Date.now() - requestStartedAt < 15000 && deadline - Date.now() > 3000 && !/^Gemini API \d+:/i.test(message) && !message.includes("总时限")) {
 					await new Promise(resolve => setTimeout(resolve, 300));
 					return requestTranslations(entries, transportRetries - 1);
 				}
 				throw error;
 			}
 		};
-		let pending = payload;
+		let pending = payload.filter(item => !indexed.has(item.id));
 		for (let repairRound = 0; repairRound <= 2 && pending.length !== 0; repairRound++) {
 			await requestTranslations(pending);
 			pending = payload.filter(item => !indexed.has(item.id));
-			if (pending.length !== 0 && repairRound < 2) await new Promise(resolve => setTimeout(resolve, 150 * (repairRound + 1)));
+			if (pending.length !== 0 && repairRound < 2) { remaining(1500); await new Promise(resolve => setTimeout(resolve, 150 * (repairRound + 1))); }
 		}
 		if (indexed.size !== text.length) throw new Error(`Gemini 返回 ID 不完整：期望 ${text.length}，实际 ${indexed.size}，补译后仍缺 ${text.length - indexed.size}`);
 		return text.map((_, id) => indexed.get(id));

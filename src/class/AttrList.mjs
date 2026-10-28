@@ -2,6 +2,10 @@ import { Console } from "@nsnanocat/util";
 import setOption from "../function/setOption.mjs";
 import aPath from "../function/aPath.mjs";
 
+function isGeneratedSubtitle(item) {
+	return item?.TAG === "#EXT-X-MEDIA" && item?.OPTION?.TYPE === "SUBTITLES" && /[?&]subtype=(?:Official|Translate|External)(?:&|$)/.test(item.OPTION.URI || "");
+}
+
 export default class AttrList {
 	constructor(format = "application/x-mpegURL", platform = "Universal") {
 		this.Name = "AttrList";
@@ -33,7 +37,8 @@ export default class AttrList {
 				const attrList = file
 					.filter(item => item?.TAG === "#EXT-X-MEDIA") // 过滤标签
 					.filter(item => item?.OPTION?.TYPE === type) // 过滤类型
-					.filter(item => item?.OPTION?.FORCED !== "YES"); // 过滤强制内容
+					.filter(item => item?.OPTION?.FORCED !== "YES")
+					.filter(item => this.platform !== "Apple" || !isGeneratedSubtitle(item));
 				//Console.debug(`attrList: ${JSON.stringify(attrList)}`);
 				//查询是否有符合语言的内容
 				for (const langcode of langCodes) {
@@ -86,7 +91,8 @@ export default class AttrList {
 	set(file = [], playlists = {}, types = [], languages = [], standard = true, device = "iPhone") {
 		//types = standard === true ? types : ["Translate"];
 		//types = standard === true ? types : [types.at(-1)];
-		types = standard === true ? types : types.reverse(); // 反转数组，先找翻译字幕，后找官方字幕
+		types = standard === true ? [...types] : [...types].reverse();
+		if (this.platform === "Apple" && standard) file = file.filter(item => !isGeneratedSubtitle(item));
 		const playlists1 = playlists?.[languages?.[0]];
 		const playlists2 = playlists?.[languages?.[1]];
 		//if (playlists1?.length !== 0) Console.debug(`有主字幕语言（源语言）字幕`);

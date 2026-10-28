@@ -17,13 +17,21 @@ export default function setENV(name, platforms, database) {
 	Console.info(`typeof Settings: ${typeof Settings}`);
 	/***************** Caches *****************/
 	if (typeof Caches?.Playlists !== "object" || Array.isArray(Caches?.Playlists)) Caches.Playlists = {}; // 创建Playlists缓存
-	Caches.Playlists.Master = new Map(JSON.parse(Caches?.Playlists?.Master || "[]")); // Strings转Array转Map
-	Caches.Playlists.Subtitle = new Map(JSON.parse(Caches?.Playlists?.Subtitle || "[]")); // Strings转Array转Map
-	if (typeof Caches?.Subtitles !== "object") Caches.Subtitles = new Map(JSON.parse(Caches?.Subtitles || "[]")); // Strings转Array转Map
+	Caches.Playlists.Master = cacheMap(Caches?.Playlists?.Master);
+	Caches.Playlists.Subtitle = cacheMap(Caches?.Playlists?.Subtitle);
+	Caches.Subtitles = cacheMap(Caches?.Subtitles);
 	if (typeof Caches?.Metadatas !== "object" || Array.isArray(Caches?.Metadatas)) Caches.Metadatas = {}; // 创建Playlists缓存
-	if (typeof Caches?.Metadatas?.Tracks !== "object") Caches.Metadatas.Tracks = new Map(JSON.parse(Caches?.Metadatas?.Tracks || "[]")); // Strings转Array转Map
+	Caches.Metadatas.Tracks = cacheMap(Caches?.Metadatas?.Tracks);
 	//Console.debug(`typeof Caches: ${typeof Caches}`, `Caches: ${JSON.stringify(Caches, null, 2)}`);
 	/***************** Configs *****************/
 	Console.log("✅ Set Environment Variables");
 	return { Settings, Caches, Configs };
+}
+
+function cacheMap(value) {
+	try {
+		if (value instanceof Map) return value;
+		if (typeof value === "string") value = JSON.parse(value);
+		return new Map(Array.isArray(value) ? value.filter(item => Array.isArray(item) && item.length === 2) : []);
+	} catch { return new Map(); }
 }

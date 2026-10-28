@@ -35,31 +35,57 @@ export default function selectHighestQuality(items, enabled = false) {
 		const lossless = /(?:^|,)(?:alac|fLaC)(?:,|$)/i.test(codecs);
 		const audioRank = joc ? 5 : lossless ? 4 : /(?:^|,)ec-3(?:,|$)/i.test(codecs) ? 3 : /(?:^|,)ac-3(?:,|$)/i.test(codecs) ? 2 : /(?:^|,)mp4a\./i.test(codecs) ? 1 : 0;
 		const channels = Math.max(0, ...audioEvidence.map(m => Number.parseInt(m.OPTION.CHANNELS || "0", 10) || 0));
-		candidates.push({ item, width, height, range: dolby ? "DolbyVision" : range, audio: joc ? "Atmos" : lossless ? "Lossless" : audioRank === 3 ? "DDPlus" : audioRank === 2 ? "DolbyDigital" : audioRank === 1 ? "AAC" : "embedded", rank: [width * height, hdrRank, codecRank, Number(a["FRAME-RATE"]) || 0, audioRank, channels], average: Number(a["AVERAGE-BANDWIDTH"]) || Number(a.BANDWIDTH), peak: Number(a.BANDWIDTH) });
+		candidates.push({ item, width, height, audioEntries: audio, range: dolby ? "DolbyVision" : range, audio: joc ? "Atmos" : lossless ? "Lossless" : audioRank === 3 ? "DDPlus" : audioRank === 2 ? "DolbyDigital" : audioRank === 1 ? "AAC" : "embedded", rank: [width * height, hdrRank, codecRank, Number(a["FRAME-RATE"]) || 0, audioRank, channels], average: Number(a["AVERAGE-BANDWIDTH"]) || Number(a.BANDWIDTH), peak: Number(a.BANDWIDTH) });
 	}
 	const compare = (a, b) => {
 		for (let i = 0; i < a.rank.length; i++) if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
 		return 0;
 	};
 	const best = candidates.reduce((a, b) => compare(a, b) >= 0 ? a : b);
-	const top = candidates.filter(v => compare(v, best) === 0);
+	const top = candidates.filter(v => v.rank.slice(0, 4).every((n, i) => n === best.rank[i]));
 	const pathways = new Map();
 	for (const v of top) {
-		// Alternate CDNs stay available; each receives its best matching bitrate.
 		const key = v.item.OPTION["PATHWAY-ID"] || "default";
-		const previous = pathways.get(key);
-		if (!previous || v.average > previous.average || (v.average === previous.average && v.peak > previous.peak)) pathways.set(key, v);
+		if (!pathways.has(key)) pathways.set(key, []);
+		pathways.get(key).push(v);
 	}
-	const winners = [...pathways.values()];
-	const retained = new Set(winners.map(v => v.item));
+	const selected = new Map(), audioRetained = new Set();
+	for (const variants of pathways.values()) {
+		const roles = new Map();
+		for (const v of variants) {
+			for (const entry of v.audioEntries.length ? v.audioEntries : [null]) {
+				const a = entry?.OPTION || {};
+				const role = [a.LANGUAGE || a.NAME || "embedded", a["ASSOC-LANGUAGE"] || "", a.CHARACTERISTICS || ""].join("|");
+				const codec = String(v.item.OPTION.CODECS || "");
+				const format = /JOC/i.test(String(a.CHANNELS || "")) || /(?:^|,)ec\+3(?:,|$)/i.test(codec) ? 5 : /(?:^|,)(?:alac|fLaC)(?:,|$)/i.test(codec) ? 4 : /(?:^|,)ec-3(?:,|$)/i.test(codec) ? 3 : /(?:^|,)ac-3(?:,|$)/i.test(codec) ? 2 : 1;
+				const score = [format, Number.parseInt(a.CHANNELS || "0", 10) || 0, v.average, v.peak];
+				const previous = roles.get(role);
+				const difference = previous ? score.map((n, i) => n - previous.score[i]).find(n => n !== 0) || 0 : 1;
+				if (difference > 0) roles.set(role, { v, entry, score });
+			}
+		}
+		for (const choice of roles.values()) {
+			selected.set(choice.v.item, choice.v);
+			if (choice.entry) audioRetained.add(choice.entry);
+		}
+	}
+	const winners = [...selected.values()].sort((a, b) => compare(b, a) || b.average - a.average || b.peak - a.peak);
 	const groups = new Set();
 	for (const v of winners) for (const type of ["AUDIO", "VIDEO", "SUBTITLES", "CLOSED-CAPTIONS"]) {
 		if (v.item.OPTION[type] && v.item.OPTION[type] !== "NONE") groups.add(`${type}:${v.item.OPTION[type]}`);
 	}
-	const body = items.filter(item => {
-		if (item?.TAG === "#EXT-X-STREAM-INF") return retained.has(item);
-		if (item?.TAG === "#EXT-X-MEDIA") return groups.has(`${item.OPTION?.TYPE}:${item.OPTION?.["GROUP-ID"]}`);
-		return true;
-	});
+	const body = [];
+	let inserted = false;
+	for (const item of items) {
+		if (item?.TAG === "#EXT-X-STREAM-INF") {
+			if (!inserted) { body.push(...winners.map(v => v.item)); inserted = true; }
+			continue;
+		}
+		if (item?.TAG === "#EXT-X-MEDIA") {
+			if (!groups.has(`${item.OPTION?.TYPE}:${item.OPTION?.["GROUP-ID"]}`)) continue;
+			if (item.OPTION.TYPE === "AUDIO" && !audioRetained.has(item)) continue;
+		}
+		body.push(item);
+	}
 	return { body, state: "locked", resolution: `${best.width}x${best.height}`, video: best.range, audio: best.audio, channels: best.rank[5], averageBandwidth: Math.max(...winners.map(v => v.average)), before: streams.length, after: winners.length };
 }

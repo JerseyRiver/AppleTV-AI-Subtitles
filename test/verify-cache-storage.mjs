@@ -49,6 +49,7 @@ function startRun(index, delay = 20) {
 			GeminiAPIKey: "mock-key",
 			GeminiModel: "gemini-3.5-flash-lite",
 			GeminiBatchSize: "400",
+			SubtitleCacheSize: "20",
 			ShowOnly: "false",
 			LogLevel: "ERROR",
 		},

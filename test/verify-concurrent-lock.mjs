@@ -83,7 +83,8 @@ const coordinators = results.map(result => result.headers?.["X-DualSubs-Gemini-C
 const summary = { quotaMode, concurrentRuns, cueCount, apiRequestCount, translatedItemCount, diagnostics, coordinators };
 console.log(JSON.stringify(summary));
 
-if (apiRequestCount !== 3) throw new Error(`并发锁失效：期望 3 个 Gemini 批次，实际 ${apiRequestCount}`);
+const expectedRequests = quotaMode ? 2 : 3;
+if (apiRequestCount !== expectedRequests) throw new Error(`并发锁/限流失效：期望 ${expectedRequests} 个 Gemini 请求，实际 ${apiRequestCount}`);
 if (quotaMode) {
 	if (diagnostics.some(value => value !== "error")) throw new Error("429 模式应全部安全回退原字幕");
 } else {

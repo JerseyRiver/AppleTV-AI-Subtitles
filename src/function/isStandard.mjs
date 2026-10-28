@@ -12,7 +12,7 @@ import { Console } from "@nsnanocat/util";
 export default function isStandard(url = new URL(), headers = {}, platform = "Universal") {
 	Console.log("☑️ is Standard?");
 	// 判断设备类型
-	const UA = headers["user-agent"] ?? headers["User-Agent"];
+	const UA = String(headers["user-agent"] ?? headers["User-Agent"] ?? "");
 	Console.debug(`UA: ${UA}`);
 	let device = UA.includes("Mozilla/5.0") ? "Web" : UA.includes("iPhone") ? "iPhone" : UA.includes("iPad") ? "iPad" : UA.includes("Macintosh") ? "Macintosh" : UA.includes("AppleTV") ? "AppleTV" : UA.includes("Apple TV") ? "AppleTV" : "iPhone";
 	switch (platform) {

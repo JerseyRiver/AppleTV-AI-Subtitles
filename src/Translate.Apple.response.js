@@ -4,20 +4,19 @@ import MD5 from "crypto-js/md5.js";
 import VTT from "./WebVTT/WebVTT.mjs";
 import database from "./function/database.mjs";
 import setENV from "./function/setENV.mjs";
-import setCache from "./function/setCache.mjs";
 import detectFormat from "./function/detectFormat.mjs";
 import Translate from "./class/Translate.mjs";
+import SubtitleCache, { hasText, validTranslation } from "./function/subtitleCache.mjs";
 
-// Modified by JerseyRiver: public configuration, isolated cache revision; no embedded secrets.
-const SUBTITLE_CACHE_KEY = "@DualSubs.Translate.Caches.Subtitles";
-const IN_FLIGHT_KEY = "@DualSubs.Translate.State.InFlight";
-const COOLDOWN_KEY = "@DualSubs.Translate.State.Cooldown";
-const LOCK_TTL = 58000;
-const WAIT_TIMEOUT = 48000;
-const WAIT_INTERVAL = 400;
-const SUBTITLE_CACHE_LIMIT = 20;
-const CUE_BOUNDARY_CACHE_REVISION = "cue-isolation-v2";
+const IN_FLIGHT_KEY = "AppleTVAI.Translate.InFlight.v2";
+const CACHE_REVISION = "cue-text-v1";
+const PROMPT_REVISION = "cue-isolation-v2";
+const started = Date.now();
+const scriptTime = typeof $script === "object" ? Number($script.startTime) : 0;
+const startedAt = scriptTime > 1e12 ? Math.min(started, scriptTime) : started;
+const DEADLINE = startedAt + 53000;
 const url = new URL($request.url);
+let credential = "";
 let format = ($response.headers?.["Content-Type"] ?? $response.headers?.["content-type"])?.split(";")?.[0];
 if (format === "application/octet-stream" || format === "text/plain") format = detectFormat(url, $response?.body, format);
 
@@ -26,10 +25,9 @@ if (format === "application/octet-stream" || format === "text/plain") format = d
 	Console.logLevel = "ERROR";
 	const { Settings, Caches } = setENV("DualSubs", [["Universal", "Translate", "API"]], database);
 	const argumentValue = (...keys) => {
-		if (!$argument || typeof $argument !== "object") return undefined;
+		if (typeof $argument !== "object" || !$argument) return undefined;
 		for (const key of keys) {
-			const direct = $argument[key];
-			const nested = _.get($argument, key);
+			const direct = $argument[key], nested = _.get($argument, key);
 			if (direct !== undefined && direct !== null && direct !== "") return direct;
 			if (nested !== undefined && nested !== null && nested !== "") return nested;
 		}
@@ -43,21 +41,28 @@ if (format === "application/octet-stream" || format === "text/plain") format = d
 		Model: argumentValue("GeminiModel", "Gemini.Model") || Settings.GeminiModel || Settings.Gemini?.Model,
 		BatchSize: argumentValue("GeminiBatchSize", "Gemini.BatchSize") || Settings.GeminiBatchSize || Settings.Gemini?.BatchSize,
 	};
-	$response.headers["X-DualSubs-Gemini-Key-Source"] = liveAPIKey ? "argument" : Settings.Gemini?.APIKey ? "storage" : "missing";
+	credential = Settings.Gemini.APIKey;
+	$response.headers["X-DualSubs-Gemini-Key-Source"] = liveAPIKey ? "argument" : credential ? "storage" : "missing";
 	$response.headers["X-DualSubs-Gemini-Model"] = Settings.Gemini.Model;
 	Console.logLevel = Settings.LogLevel;
-	const languages = [
-		url.searchParams?.get("lang")?.toUpperCase?.() ?? Settings.Languages[0],
-		(url.searchParams?.get("tlang") ?? Caches?.tlang)?.toUpperCase?.() ?? Settings.Languages[1],
-	];
+	const languages = [url.searchParams?.get("lang")?.toUpperCase?.() ?? Settings.Languages[0], (url.searchParams?.get("tlang") ?? Caches?.tlang)?.toUpperCase?.() ?? Settings.Languages[1]];
 	const body = VTT.parse($response.body);
-	const fullText = body?.body.map(item => (item?.text ?? "\u200b")?.replace(/<\/?[^<>]+>/g, ""));
-	const originalCacheKey = MD5(`${Settings.Vendor}|${Settings?.Gemini?.Model ?? ""}|${languages.join("|")}|${$response.body}`).toString();
-	const cacheKey = MD5(`${CUE_BOUNDARY_CACHE_REVISION}|${originalCacheKey}`).toString();
-	$response.headers["X-DualSubs-Gemini-Cache-Revision"] = CUE_BOUNDARY_CACHE_REVISION;
-	let translation = Caches.Subtitles.get(cacheKey);
-	if (!Array.isArray(translation) || translation.length !== fullText.length) {
-		const slot = await claimTranslationSlot(cacheKey, fullText.length);
+	const fullText = body.body.map(item => (item?.text ?? "").replace(/<\/?[^<>]+>/g, ""));
+	if (!fullText.some(hasText)) return;
+	const identity = `${Settings.Vendor}|${Settings.Gemini.Model ?? ""}|${languages.join("|")}`;
+	const cacheKey = MD5(JSON.stringify([CACHE_REVISION, PROMPT_REVISION, identity, fullText])).toString();
+	const oldKey = MD5(`${identity}|${$response.body}`).toString();
+	const legacyKeys = [MD5(`${PROMPT_REVISION}|${oldKey}`).toString()];
+	const cache = new SubtitleCache(Storage, {
+		limit: argumentValue("SubtitleCacheSize") || Settings.SubtitleCacheSize || 100,
+		maxBytes: Math.max(1, Math.min(64, Number(argumentValue("SubtitleCacheMB") || Settings.SubtitleCacheMB || 12))) * 1024 * 1024,
+	});
+	const quotaKey = `AppleTVAI.Translate.Quota.${MD5(credential || "missing").toString()}`;
+	const contentCooldownKey = `${quotaKey}.${cacheKey}`;
+	$response.headers["X-DualSubs-Gemini-Cache-Revision"] = CACHE_REVISION;
+	let translation = cache.get(cacheKey, fullText, legacyKeys);
+	if (!translation) {
+		const slot = await claimTranslationSlot(cache, cacheKey, fullText, legacyKeys, [quotaKey, contentCooldownKey]);
 		if (slot.translation) {
 			translation = slot.translation;
 			$response.headers["X-DualSubs-Gemini-Coordinator"] = "wait-cache-hit";
@@ -65,158 +70,101 @@ if (format === "application/octet-stream" || format === "text/plain") format = d
 		} else {
 			$response.headers["X-DualSubs-Gemini-Coordinator"] = "leader";
 			try {
-				translation = await translator(Settings.Vendor, Settings.Method, fullText, languages, Settings?.[Settings?.Vendor], Settings?.Times, Settings?.Interval, Settings?.Exponential);
-				if (Array.isArray(translation) && translation.length === fullText.length) {
-					const saved = savePersistentTranslation(cacheKey, translation);
-					Caches.Subtitles = saved.cache;
-					$response.headers["X-DualSubs-Gemini-Cache"] = `${saved.verified ? "write-ok" : "write-failed"}; entries=${saved.size}`;
-					clearCooldown();
-				}
+				translation = await translator(Settings.Vendor, fullText, languages, Settings?.[Settings.Vendor], cache, cacheKey);
+				if (!validTranslation(translation, fullText)) throw new Error("翻译结果不完整，未覆盖原字幕或成品缓存");
+				const saved = cache.set(cacheKey, translation, legacyKeys);
+				$response.headers["X-DualSubs-Gemini-Cache"] = `${saved.verified ? "write-ok" : saved.reason === "oversize" ? "oversize-not-cached" : "write-failed"}; entries=${saved.size}`;
+				if (saved.verified) cache.clearProgress(cacheKey);
+				Storage.setItem(contentCooldownKey, {});
 				$response.headers["X-DualSubs-Gemini"] = `translated; cues=${translation.length}`;
 			} catch (error) {
-				setCooldown(error);
+				const message = errorText(error);
+				const quota = /Gemini API 429|quota/i.test(message);
+				Storage.setItem(quota ? quotaKey : contentCooldownKey, { expiresAt: Date.now() + (quota ? 60000 : 8000), reason: message.slice(0, 120) });
 				throw error;
-			} finally {
-				releaseTranslationSlot(slot.owner);
-			}
+			} finally { releaseTranslationSlot(slot.owner); }
 		}
 	} else {
-		Console.info("Gemini 字幕缓存命中");
 		$response.headers["X-DualSubs-Gemini-Coordinator"] = "cache";
 		$response.headers["X-DualSubs-Gemini"] = `cache-hit; cues=${translation.length}`;
 	}
-	body.body = body.body.map((item, i) => {
-		item.text = combineText(item?.text ?? "\u200b", translation?.[i], Settings?.ShowOnly, Settings?.Position);
-		return item;
+	body.body.forEach((item, i) => {
+		const original = item.text ?? "";
+		item.text = Settings.ShowOnly ? translation[i] : Settings.Position === "Reverse" ? `${translation[i]}\n${original}` : `${original}\n${translation[i]}`;
 	});
 	$response.body = VTT.stringify(body);
 })()
 	.catch(error => {
-		Console.error(error);
+		const message = errorText(error);
+		Console.error(message);
 		$response.headers["X-DualSubs-Gemini"] = "error";
-		$response.headers["X-DualSubs-Gemini-Error"] = encodeURIComponent(String(error?.message ?? error)).slice(0, 180);
+		$response.headers["X-DualSubs-Gemini-Error"] = encodeURIComponent(message).slice(0, 180);
 	})
 	.finally(() => done($response));
 
-async function translator(vendor = "Gemini", method = "Part", text = [], [source = "AUTO", target = "ZH"], api = {}, times = 3, interval = 100, exponential = true) {
-	let length = 120;
-	if (vendor === "Gemini") length = Math.max(100, Math.min(600, Number.parseInt(api?.BatchSize ?? 400, 10) || 400));
-	else if (["Microsoft", "Azure"].includes(vendor)) length = 99;
-	else if (vendor === "DeepL") length = 49;
-	else if (vendor === "DeepLX") length = 20;
-	const retries = vendor === "Gemini" ? 0 : times;
-	if (method === "Row") return await Promise.all(text.map(row => retry(() => new Translate({ Source: source, Target: target, API: api })[vendor](row), retries, interval, exponential)));
-	if (vendor === "Gemini") {
-		// Gemini tends to improve target-language word order by moving clauses
-		// between neighboring subtitle cues. IDs remain valid, but the words then
-		// appear at the wrong timestamps. Distribute consecutive cues across the
-		// same number of API requests and restore their original order afterwards.
-		const scatteredParts = scatterForCueIsolation(text, length);
-		const translatedParts = await Promise.all(scatteredParts.map(part => retry(() => new Translate({ Source: source, Target: target, API: api })[vendor](part.map(item => item.text)), retries, interval, exponential)));
-		const restored = new Array(text.length);
-		translatedParts.forEach((translatedPart, partIndex) => {
-			scatteredParts[partIndex].forEach((item, itemIndex) => {
-				restored[item.index] = translatedPart[itemIndex];
-			});
-		});
-		return restored;
-	}
-	const parts = chunk(text, length);
-	return await Promise.all(parts.map(part => retry(() => new Translate({ Source: source, Target: target, API: api })[vendor](part), retries, interval, exponential))).then(part => part.flat(Number.POSITIVE_INFINITY));
+function errorText(error) {
+	const message = String(error?.message ?? error);
+	return credential ? message.split(credential).join("[redacted]") : message;
 }
 
-function combineText(originText, transText, showOnly = false, position = "Forward", lineBreak = "\n") {
-	if (showOnly) return transText;
-	return position === "Reverse" ? `${transText}${lineBreak}${originText}` : `${originText}${lineBreak}${transText}`;
-}
-
-function chunk(source, length) {
-	let index = 0;
-	const target = [];
-	while (index < source.length) target.push(source.slice(index, (index += length)));
-	return target;
-}
-
-function scatterForCueIsolation(source, length) {
-	const partCount = Math.max(1, Math.ceil(source.length / length));
+async function translator(vendor, text, languages, api = {}, cache, cacheKey) {
+	if (vendor !== "Gemini") throw new Error("此 Apple TV 翻译入口仅支持 Gemini");
+	const length = Math.max(100, Math.min(600, Number.parseInt(api?.BatchSize ?? 400, 10) || 400));
+	// Short subtitles also use two alternating batches, except for a single cue.
+	const partCount = Math.max(text.length > 1 ? 2 : 1, Math.ceil(text.length / length));
 	const parts = Array.from({ length: partCount }, () => []);
-	source.forEach((text, index) => parts[index % partCount].push({ index, text }));
-	return parts;
-}
-
-async function retry(fn, retriesLeft = 3, interval = 100, exponential = true) {
-	try {
-		return await fn();
-	} catch (error) {
-		if (!retriesLeft) throw error;
-		await new Promise(resolve => setTimeout(resolve, interval));
-		return retry(fn, retriesLeft - 1, exponential ? interval * 2 : interval, exponential);
+	text.forEach((value, index) => parts[index % partCount].push({ index, text: value }));
+	const restored = new Array(text.length);
+	let cursor = 0, resumed = 0;
+	const failures = [];
+	async function worker() {
+		while (cursor < parts.length && !failures.length) {
+			const part = parts[cursor++];
+			const source = part.map(item => item.text);
+			const partKey = MD5(JSON.stringify(source)).toString();
+			const previous = cache.progress(cacheKey, partKey);
+			try {
+				let translated;
+				if (validTranslation(previous, source)) { translated = previous; resumed++; }
+				else {
+					if (Date.now() + 2000 >= DEADLINE) throw new Error("Gemini 翻译总时限已到；已完成进度已保留，请稍后重试");
+					translated = await new Translate({ Source: languages[0], Target: languages[1], API: { ...api, Deadline: DEADLINE, InitialTranslations: previous, OnProgress: snapshot => cache.saveProgress(cacheKey, partKey, snapshot) } }).Gemini(source);
+					cache.saveProgress(cacheKey, partKey, translated);
+				}
+				part.forEach((item, i) => { restored[item.index] = translated[i]; });
+			} catch (error) { failures.push(error); }
+		}
 	}
+	await Promise.all(Array.from({ length: Math.min(2, parts.length) }, worker));
+	$response.headers["X-DualSubs-Gemini-Progress"] = `batches=${parts.length}; resumed=${resumed}`;
+	if (failures.length) throw failures.find(error => /429|quota/i.test(errorText(error))) || failures[0];
+	return restored;
 }
 
-async function claimTranslationSlot(cacheKey, expectedLength) {
+async function claimTranslationSlot(cache, cacheKey, source, aliases, cooldownKeys) {
 	const owner = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-	const startedAt = Date.now();
-	while (Date.now() - startedAt < WAIT_TIMEOUT) {
-		const cached = readPersistentTranslation(cacheKey, expectedLength);
-		if (cached) return { translation: cached };
-		const cooldown = Storage.getItem(COOLDOWN_KEY, {});
-		if (Number(cooldown?.expiresAt ?? 0) > Date.now()) {
-			const waitSeconds = Math.max(1, Math.ceil((Number(cooldown.expiresAt) - Date.now()) / 1000));
-			throw new Error(`Gemini 冷却中，请约 ${waitSeconds} 秒后重试：${cooldown?.reason ?? "上次请求失败"}`);
-		}
+	let lastCacheCheck = 0;
+	while (Date.now() + 1500 < DEADLINE) {
 		const inFlight = Storage.getItem(IN_FLIGHT_KEY, {});
-		if (Number(inFlight?.expiresAt ?? 0) <= Date.now()) {
-			Storage.setItem(IN_FLIGHT_KEY, { cacheKey, owner, expiresAt: Date.now() + LOCK_TTL });
+		if (Date.now() - lastCacheCheck > 1000 || !inFlight?.owner) {
+			const translation = cache.get(cacheKey, source, aliases);
+			if (translation) return { translation };
+			lastCacheCheck = Date.now();
+		}
+		for (const key of cooldownKeys) {
+			const cooldown = Storage.getItem(key, {});
+			if (Number(cooldown?.expiresAt || 0) > Date.now()) throw new Error(`Gemini 冷却中，请稍后重试：${cooldown.reason || "上次请求失败"}`);
+		}
+		if (Number(inFlight?.expiresAt || 0) <= Date.now()) {
+			Storage.setItem(IN_FLIGHT_KEY, { cacheKey, owner, expiresAt: DEADLINE + 2000 });
 			await new Promise(resolve => setTimeout(resolve, 25));
-			const confirmed = Storage.getItem(IN_FLIGHT_KEY, {});
-			if (confirmed?.owner === owner && confirmed?.cacheKey === cacheKey) return { owner };
+			if (Storage.getItem(IN_FLIGHT_KEY, {})?.owner === owner) return { owner };
 		}
-		await new Promise(resolve => setTimeout(resolve, WAIT_INTERVAL));
+		await new Promise(resolve => setTimeout(resolve, 200));
 	}
-	throw new Error("同一字幕正在翻译，等待缓存超时");
-}
-
-function readPersistentTranslation(cacheKey, expectedLength) {
-	const cache = readPersistentSubtitleCache();
-	const translation = cache.get(cacheKey);
-	return Array.isArray(translation) && translation.length === expectedLength ? translation : null;
-}
-
-function readPersistentSubtitleCache() {
-	let stored = Storage.getItem(SUBTITLE_CACHE_KEY, []);
-	if (typeof stored === "string") {
-		try {
-			stored = JSON.parse(stored);
-		} catch {
-			stored = [];
-		}
-	}
-	return stored instanceof Map ? new Map(stored) : new Map(Array.isArray(stored) ? stored : []);
-}
-
-function savePersistentTranslation(cacheKey, translation) {
-	// 翻译期间其他脚本可能已写入别的影片；保存前重新读取并合并，避免旧快照覆盖新缓存。
-	const latest = readPersistentSubtitleCache();
-	latest.delete(cacheKey);
-	latest.set(cacheKey, translation);
-	const serialized = setCache(latest, SUBTITLE_CACHE_LIMIT);
-	const written = Storage.setItem(SUBTITLE_CACHE_KEY, serialized);
-	const verified = Boolean(written) && Boolean(readPersistentTranslation(cacheKey, translation.length));
-	return { cache: new Map(serialized), size: serialized.length, verified };
+	throw new Error("等待字幕翻译超时；下次可继续已有进度");
 }
 
 function releaseTranslationSlot(owner) {
-	const inFlight = Storage.getItem(IN_FLIGHT_KEY, {});
-	if (inFlight?.owner === owner) Storage.setItem(IN_FLIGHT_KEY, { cacheKey: "", owner: "", expiresAt: 0 });
-}
-
-function setCooldown(error) {
-	const message = String(error?.message ?? error);
-	const duration = /Gemini API 429|quota/i.test(message) ? 60000 : 8000;
-	Storage.setItem(COOLDOWN_KEY, { expiresAt: Date.now() + duration, reason: message.slice(0, 120) });
-}
-
-function clearCooldown() {
-	Storage.setItem(COOLDOWN_KEY, { expiresAt: 0, reason: "" });
+	if (Storage.getItem(IN_FLIGHT_KEY, {})?.owner === owner) Storage.setItem(IN_FLIGHT_KEY, {});
 }

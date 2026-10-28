@@ -124,10 +124,8 @@ Console.info(`PLATFORM: ${PLATFORM}`);
 					// WebVTT.m3u8加参数
 					body = body.map((item, i) => {
 						if (/^.+\.((web)?vtt|ttml2?|xml|smi)(\?.+)?$/.test(item?.URI)) {
-							const symbol = item.URI.includes("?") ? "&" : "?";
 							if (!isLiveTranslate && !/empty|blank|default/.test(item.URI)) {
-								item.URI += `${symbol}subtype=${Type}`;
-								if (url.searchParams?.has("lang")) item.URI += `&lang=${url.searchParams.get("lang")}`;
+								item.URI = subtitleURI(item.URI, Type, url.searchParams?.get("lang"));
 							}
 							if (item.TAG === "#EXT-X-BYTERANGE")
 								body[i - 1].URI = item.URI; // 删除BYTERANGE
@@ -334,18 +332,46 @@ async function registerAppleReference(body, masterURL, assetId) {
 		playlistURL = playlistURL
 			.replace("//play-edge-cdn.itunes.apple.com/", "//play-edge.itunes.apple.com/")
 			.replace("//play-cdn.itunes.apple.com/", "//play.itunes.apple.com/");
-		const response = await fetch({
-			url: `${EXTERNAL_SUBTITLE_BASE_URL}/apple/${assetId}/reference.json`,
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ playlist_url: playlistURL }),
-			timeout: 8,
-		});
+		const storeKey = "AppleTVAI.ExternalReference.v1";
+		const records = Storage.getItem(storeKey, {});
+		const id = `${EXTERNAL_SUBTITLE_BASE_URL}|${assetId}`;
+		const record = records[id];
+		if (record && record.expiresAt > Date.now() && (record.url === playlistURL || record.state !== "registered")) {
+			$response.headers["X-DualSubs-External-Sync"] = `${record.state}-cached`;
+			return;
+		}
+		const save = (state, ttl) => {
+			const latest = Storage.getItem(storeKey, {});
+			latest[id] = { state, url: playlistURL, expiresAt: Date.now() + ttl };
+			const retained = Object.entries(latest).filter(([, value]) => value?.expiresAt > Date.now()).sort((a, b) => a[1].expiresAt - b[1].expiresAt).slice(-120);
+			Storage.setItem(storeKey, Object.fromEntries(retained));
+		};
+		save("registering", 4000);
+		let response;
+		try {
+			response = await fetch({
+				url: `${EXTERNAL_SUBTITLE_BASE_URL}/apple/${assetId}/reference.json`,
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ playlist_url: playlistURL }),
+				timeout: 2,
+			});
+		} catch (error) { save("registration-failed", 20000); throw error; }
+		save(response?.ok ? "registered" : "registration-failed", response?.ok ? 600000 : 20000);
 		$response.headers["X-DualSubs-External-Sync"] = response?.ok ? "registered" : `http-${response?.status || "error"}`;
 	} catch (error) {
 		Console.warn("Apple CC reference registration failed");
 		$response.headers["X-DualSubs-External-Sync"] = "registration-failed";
 	}
+}
+
+function subtitleURI(uri, type, language) {
+	const position = uri.indexOf("?");
+	const path = position < 0 ? uri : uri.slice(0, position);
+	const fields = position < 0 ? [] : uri.slice(position + 1).split("&").filter(field => !/^(?:subtype|lang)=/.test(field));
+	fields.push(`subtype=${encodeURIComponent(type)}`);
+	if (language) fields.push(`lang=${encodeURIComponent(language)}`);
+	return `${path}?${fields.join("&")}`;
 }
 
 function configuredGatewayURL() {
