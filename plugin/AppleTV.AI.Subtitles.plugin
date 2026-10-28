@@ -2,7 +2,7 @@
 #!desc = Apple TV 中文字幕：Gemini 翻译、设备缓存、可选自建外部字幕网关。基于 DualSubs 修改；字幕需手动选择。API Key 和网关地址由使用者自行填写。
 #!author = JerseyRiver[https://github.com/JerseyRiver]
 #!homepage = https://github.com/JerseyRiver/AppleTV-AI-Subtitles
-#!icon = https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/assets/icon.png
+#!icon = https://raw.githubusercontent.com/JerseyRiver/AppleTV-AI-Subtitles/main/assets/icon-button.png
 #!tag = AppleTV AI Subtitles
 #!system = iOS,iPadOS,macOS
 #!date = 2026-10-28
