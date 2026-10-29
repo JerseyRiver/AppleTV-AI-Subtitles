@@ -243,7 +243,7 @@ export default class Translate {
 					systemInstruction: {
 						parts: [
 							{
-								text: `You are a professional film and TV subtitle translator. Translate from ${sourceName} to ${targetName}. Use natural, concise spoken language. Neighboring items may be consulted only to understand names, pronouns, and context. Every output text must translate only the source text from the input object with the same numeric id. Never move a word, clause, or meaning from one id to another, even when a sentence spans multiple subtitle cues or target-language word order would sound more natural. Preserve an incomplete source fragment as an incomplete translated fragment instead of completing it with content from a neighboring item. Preserve speaker dashes, line breaks, names, ellipses and tone. For every input object, return exactly one object with the same numeric id and only its translated text. Input ids may be non-consecutive. Never omit, invent, merge, reorder, or renumber ids. Each id is displayed at a different timestamp, so cross-id semantic reordering is an incorrect translation.`,
+								text: `You are a professional film and TV subtitle translator. Translate from ${sourceName} to ${targetName}. Use natural, concise spoken language. Neighboring items may be consulted only to understand names, pronouns, and context. Every output text must translate only the source text from the input object with the same numeric id. Never move a word, clause, or meaning from one id to another, even when a sentence spans multiple subtitle cues or target-language word order would sound more natural. Preserve an incomplete source fragment as an incomplete translated fragment instead of completing it with content from a neighboring item. Preserve speaker dashes, line breaks, names, ellipses and tone. Return compact JSON with exactly two parallel arrays: "ids" contains the unchanged input numeric ids; "texts" contains their translated texts at matching array positions. Both arrays must have the same length, with exactly one translation for each input id. Input ids may be non-consecutive. Never omit, invent, merge, reorder, or renumber ids. Each id is displayed at a different timestamp, so cross-id semantic reordering is an incorrect translation. Do not pretty-print: omit indentation and whitespace outside strings.`,
 							},
 						],
 					},
@@ -261,19 +261,10 @@ export default class Translate {
 						responseSchema: {
 							type: "OBJECT",
 							properties: {
-								translations: {
-									type: "ARRAY",
-									items: {
-										type: "OBJECT",
-										properties: {
-											id: { type: "INTEGER" },
-											text: { type: "STRING" },
-										},
-										required: ["id", "text"],
-									},
-								},
+								ids: { type: "ARRAY", items: { type: "INTEGER" } },
+								texts: { type: "ARRAY", items: { type: "STRING" } },
 							},
-							required: ["translations"],
+							required: ["ids", "texts"],
 						},
 					},
 				}),
@@ -296,7 +287,12 @@ export default class Translate {
 					if (!match) throw new Error("Gemini 未返回有效 JSON");
 					parsed = JSON.parse(match[0]);
 				}
-				const translations = parsed?.translations;
+				let translations = parsed?.translations;
+				if (parsed && (Object.prototype.hasOwnProperty.call(parsed, "ids") || Object.prototype.hasOwnProperty.call(parsed, "texts"))) {
+					if (!Array.isArray(parsed.ids) || !Array.isArray(parsed.texts) || parsed.ids.length !== parsed.texts.length) throw new Error("Gemini 返回的字幕 ID 与译文数组不匹配，未保存该结果");
+					if (new Set(parsed.ids).size !== parsed.ids.length || parsed.ids.some(id => !Number.isInteger(id) || !entryIds.has(id))) throw new Error("Gemini 返回无效或重复字幕 ID，未保存该结果");
+					translations = parsed.ids.map((id, i) => ({ id, text: parsed.texts[i] }));
+				}
 				if (Array.isArray(translations)) {
 					translations.forEach(item => {
 						if (Number.isInteger(item?.id) && entryIds.has(item.id) && hasText(item?.text) && !indexed.has(item.id)) indexed.set(item.id, item.text.trim());

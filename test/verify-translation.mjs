@@ -7,7 +7,7 @@ const bundle = fs.readFileSync('plugin/scripts/Translate.response.bundle.js', 'u
 const timestamp = seconds => `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor(seconds % 3600 / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 const body = `WEBVTT\n\n${Array.from({ length: 805 }, (_, i) => `${timestamp(i * 2)}.000 --> ${timestamp(i * 2 + 1)}.500\nOriginal cue ${i}.\n`).join('\n')}`;
 
-async function run({ key = 'mock-key', incomplete = false, showOnly = false } = {}) {
+async function run({ key = 'mock-key', incomplete = false, showOnly = false, compact = true, malformed = false } = {}) {
   const storage = new Map();
   const requests = [];
   const logs = [];
@@ -21,8 +21,12 @@ async function run({ key = 'mock-key', incomplete = false, showOnly = false } = 
     const indexes = entries.map(item => Number(item.text.match(/cue (\d+)/)[1]));
     requests.push(indexes);
     assert.ok(payload.systemInstruction.parts[0].text.includes('Never move a word'));
+    assert.deepEqual(payload.generationConfig.responseSchema.required, ['ids', 'texts']);
     const translated = entries.map((item, i) => ({ id: item.id, text: `译文 ${indexes[i]}` }));
-    callback(null, { status: 200, headers: {} }, JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ translations: incomplete ? [] : translated.reverse() }) }] } }] }));
+    const reversed = incomplete ? [] : translated.reverse();
+    const response = compact ? { ids: reversed.map(item => item.id), texts: reversed.map(item => item.text) } : { translations: reversed };
+    if (malformed) response.ids.push(999999);
+    callback(null, { status: 200, headers: {} }, JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(response) }] } }] }));
   };
   const context = vm.createContext({
     console: { log: value => logs.push(String(value)), warn() {}, error() {} },
@@ -63,4 +67,9 @@ const partial = await run({ incomplete: true });
 assert.equal(partial.result.body, body);
 const cache = JSON.parse(partial.storage.get('DualSubs') || '{}').Translate?.Caches?.Subtitles;
 assert.ok(!cache || JSON.parse(cache).length === 0, 'Incomplete translation should not be committed');
-console.log('Cue isolation, reordered IDs, timing preservation, no-key safety and incomplete-cache safety passed.');
+const legacy = await run({ compact: false });
+assert.match(legacy.result.body, /译文 804/);
+const malformed = await run({ malformed: true });
+assert.equal(malformed.result.body, body, 'Mismatched compact arrays corrupted cue mapping');
+assert.equal(malformed.result.headers['X-DualSubs-Gemini'], 'error');
+console.log('Compact/legacy output, ID pairing, reordered IDs, timing preservation, no-key and incomplete-cache safety passed.');

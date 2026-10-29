@@ -41,10 +41,12 @@ if (format === "application/octet-stream" || format === "text/plain") format = d
 		APIKey: liveAPIKey || Settings.GeminiAPIKey || Settings.Gemini?.APIKey || "",
 		Model: argumentValue("GeminiModel", "Gemini.Model") || Settings.GeminiModel || Settings.Gemini?.Model,
 		BatchSize: argumentValue("GeminiBatchSize", "Gemini.BatchSize") || Settings.GeminiBatchSize || Settings.Gemini?.BatchSize,
+		Concurrency: argumentValue("GeminiConcurrency", "Gemini.Concurrency") || Settings.GeminiConcurrency || Settings.Gemini?.Concurrency || 3,
 	};
 	credential = Settings.Gemini.APIKey;
 	$response.headers["X-DualSubs-Gemini-Key-Source"] = liveAPIKey ? "argument" : credential ? "storage" : "missing";
 	$response.headers["X-DualSubs-Gemini-Model"] = Settings.Gemini.Model;
+	$response.headers["X-DualSubs-Gemini-Response-Format"] = "ids-texts-v1";
 	Console.logLevel = Settings.LogLevel;
 	const languages = [url.searchParams?.get("lang")?.toUpperCase?.() ?? Settings.Languages[0], (url.searchParams?.get("tlang") ?? Caches?.tlang)?.toUpperCase?.() ?? Settings.Languages[1]];
 	const body = VTT.parse($response.body);
@@ -121,6 +123,7 @@ async function translator(vendor, text, languages, api = {}, cache, cacheKey) {
 	// Short subtitles also use two alternating batches, except for a single cue.
 	const partCount = Math.max(text.length > 1 ? 2 : 1, Math.ceil(text.length / length));
 	const parts = Array.from({ length: partCount }, () => []);
+	const parallel = Math.max(1, Math.min(4, Number.parseInt(api?.Concurrency ?? 3, 10) || 3));
 	text.forEach((value, index) => parts[index % partCount].push({ index, text: value }));
 	const restored = new Array(text.length);
 	let cursor = 0, resumed = 0;
@@ -143,8 +146,8 @@ async function translator(vendor, text, languages, api = {}, cache, cacheKey) {
 			} catch (error) { failures.push(error); }
 		}
 	}
-	await Promise.all(Array.from({ length: Math.min(2, parts.length) }, worker));
-	$response.headers["X-DualSubs-Gemini-Progress"] = `batches=${parts.length}; resumed=${resumed}`;
+	await Promise.all(Array.from({ length: Math.min(parallel, parts.length) }, worker));
+	$response.headers["X-DualSubs-Gemini-Progress"] = `batches=${parts.length}; parallel=${Math.min(parallel, parts.length)}; resumed=${resumed}`;
 	if (failures.length) throw failures.find(error => /429|quota/i.test(errorText(error))) || failures[0];
 	return restored;
 }
