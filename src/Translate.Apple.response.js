@@ -41,7 +41,6 @@ if (format === "application/octet-stream" || format === "text/plain") format = d
 		APIKey: liveAPIKey || Settings.GeminiAPIKey || Settings.Gemini?.APIKey || "",
 		Model: argumentValue("GeminiModel", "Gemini.Model") || Settings.GeminiModel || Settings.Gemini?.Model,
 		BatchSize: argumentValue("GeminiBatchSize", "Gemini.BatchSize") || Settings.GeminiBatchSize || Settings.Gemini?.BatchSize,
-		Concurrency: argumentValue("GeminiConcurrency", "Gemini.Concurrency") || Settings.GeminiConcurrency || Settings.Gemini?.Concurrency || 3,
 	};
 	credential = Settings.Gemini.APIKey;
 	$response.headers["X-DualSubs-Gemini-Key-Source"] = liveAPIKey ? "argument" : credential ? "storage" : "missing";
@@ -123,7 +122,9 @@ async function translator(vendor, text, languages, api = {}, cache, cacheKey) {
 	// Short subtitles also use two alternating batches, except for a single cue.
 	const partCount = Math.max(text.length > 1 ? 2 : 1, Math.ceil(text.length / length));
 	const parts = Array.from({ length: partCount }, () => []);
-	const parallel = Math.max(1, Math.min(4, Number.parseInt(api?.Concurrency ?? 3, 10) || 3));
+	// Restore v1.0 scheduling: every batch may start without waiting for another.
+	// Ignore the retired concurrency option, including values saved by old installs.
+	const parallel = parts.length;
 	text.forEach((value, index) => parts[index % partCount].push({ index, text: value }));
 	const restored = new Array(text.length);
 	let cursor = 0, resumed = 0;

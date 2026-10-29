@@ -75,16 +75,24 @@ const resumed = await simulate({ storage: interrupted.storage, start: interrupte
 assert.equal(resumed.requests.length, 1, 'Valid finished batches were translated again');
 assert.match(resumed.results[0].output.headers['X-DualSubs-Gemini-Progress'], /resumed=2/);
 
-const serial = await simulate({ parallel: 1, duration: 1000 });
-assert.equal(serial.maxActive, 1);
-assert.equal(serial.requests.length, 3);
-assert.ok(serial.results[0].elapsed >= 3000);
-const bounded = await simulate({ count: 2401, parallel: 99, duration: 1000 });
-assert.equal(bounded.maxActive, 4, 'Configured parallelism bypassed its upper bound');
-assert.equal(bounded.requests.length, 7);
+// Previously saved values must not silently preserve the queue after updating.
+for (const parallel of [1, 2, 3, 99]) {
+  const all = await simulate({ count: 1594, parallel, duration: 20000 });
+  assert.equal(all.maxActive, 4);
+  assert.equal(all.requests.length, 4);
+  assert.ok(all.requests.every(request => request.at < 100));
+  assert.ok(all.results[0].elapsed < 21000);
+  assert.match(all.results[0].output.headers['X-DualSubs-Gemini-Progress'], /batches=4; parallel=4/);
+}
+const larger = await simulate({ count: 2401, duration: 1000 });
+assert.equal(larger.maxActive, 7);
+assert.equal(larger.requests.length, 7);
 const stopped = await simulate({ count: 2401, parallel: 2, duration: 1000, errorBatch: 1 });
-assert.equal(stopped.requests.length, 2, 'Quota failure launched queued work');
+assert.equal(stopped.requests.length, 7, 'All batches should already be dispatched when quota failure arrives');
+assert.equal(stopped.results[0].output.headers['X-DualSubs-Gemini'], 'error');
+const cooldown = await simulate({ count: 2401, storage: stopped.storage, start: stopped.now + 1000 });
+assert.equal(cooldown.requests.length, 0, 'Quota cooldown must still block a new attempt');
 const invalid = await simulate({ duplicateIds: true, duration: 1000 });
 assert.equal(invalid.results[0].output.body, invalid.body, 'Duplicate IDs produced mismatched captions');
 assert.equal(invalid.results[0].output.headers['X-DualSubs-Gemini'], 'error');
-console.log('First-load scheduling passed: three batches in one wave, 30-second virtual playback window, single leader, ID-bound output, resume, cache reuse, parallel bounds and quota stop.');
+console.log('First-load scheduling passed: three batches in one wave, 30-second virtual playback window, single leader, ID-bound output, resume, cache reuse, all-batch scheduling, ignored legacy settings and quota cooldown.');
