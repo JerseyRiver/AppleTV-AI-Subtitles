@@ -34,6 +34,14 @@ export default class Retranslate {
 	write(state) {
 		if (!this.store.setItem(KEY, state)) throw new Error("重译操作状态保存失败；为避免重复消耗，未执行重译");
 	}
+	preview(film) {
+		if (!validFilm(film)) return "";
+		const state = this.read();
+		// Change the advertised URL to bypass player caches, but do not bind the
+		// action to a title until the generated subtitle is actually requested.
+		if (this.enabled && state.enabled && state.request === this.request && validRetry(state.pending)) return state.pending;
+		return this.select(film, false);
+	}
 	select(film, consume = true) {
 		if (!validFilm(film)) return "";
 		const state = this.read();

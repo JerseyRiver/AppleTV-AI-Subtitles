@@ -76,7 +76,7 @@ Console.info(`PLATFORM: ${PLATFORM}`);
 					if (retry) {
 						const tracks = body.filter(item => item?.OPTION?.TYPE === "SUBTITLES" && /[?&]subtype=Translate(?:&|$)/.test(item.OPTION.URI || ""));
 						const film = filmFromURL(url, tracks[0]?.OPTION.URI);
-						const token = retry.select(film, tracks.length > 0);
+						const token = retry.preview(film);
 						for (const track of tracks) {
 							track.OPTION.URI = replaceQueryParameter(track.OPTION.URI, "dsfilm", film);
 							if (token) track.OPTION.URI = replaceQueryParameter(track.OPTION.URI, "dsretry", token);
@@ -273,7 +273,7 @@ async function addExternalSubtitleTrack(body, url, retry) {
 	const discontinuitySequence = mainAssetDiscontinuitySequence(body, assetId);
 	const frameRate = mainAssetFrameRate(body, assetId);
 	await registerAppleReference(body, url, assetId);
-	const token = retry?.select(`apple:${assetId}`) || "";
+	const token = retry?.preview(`apple:${assetId}`) || "";
 	const endpoint = externalPlaylistURL(assetId, metadata, discontinuitySequence, frameRate, token);
 	const stableId = `ds${assetId.slice(-7)}v110`;
 	const templates = [];
@@ -499,7 +499,9 @@ function externalPlaylistURL(assetId, metadata, discontinuitySequence = 0, frame
 		.filter(([, value]) => value !== undefined && value !== null && value !== "")
 		.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
 		.join("&");
-	return `${EXTERNAL_SUBTITLE_BASE_URL}/apple/${assetId}/playlist.m3u8?${params}`;
+	// Locally intercepted only when this subtitle rendition is requested.
+	// Gateway credentials stay in the plugin arguments, not in this Apple URL.
+	return `https://hls.itunes.apple.com/dualsubs-external/apple/${assetId}/playlist.m3u8?${params}`;
 }
 
 /**

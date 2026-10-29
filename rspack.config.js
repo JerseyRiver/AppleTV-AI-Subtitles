@@ -21,6 +21,7 @@ export default defineConfig({
     '@nsnanocat/url': path.resolve('vendor/nsnanocat-url/URL.mjs'),
   } },
   entry: {
+    'External.Subtitles.request': './src/External.Subtitles.request.js',
     'Composite.Subtitles.response': './src/Composite.Subtitles.response.js',
     'Manifest.response': './src/Manifest.response.js',
     'Translate.response': './src/Translate.Apple.response.js',

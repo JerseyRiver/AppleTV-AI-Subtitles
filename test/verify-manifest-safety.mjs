@@ -121,7 +121,8 @@ const externalResult = await run(
 const externalLine = externalResult.body.split(/\r?\n/).find(line => line.includes("外部中文字幕"));
 if (!externalLine) throw new Error("CC-only 影片没有生成外部字幕轨");
 if (!externalLine.includes("AUTOSELECT=NO") || !externalLine.includes("DEFAULT=NO")) throw new Error("外部字幕轨不是手动选择");
-if (!externalLine.includes("subtitles.example.com")) throw new Error("外部字幕轨没有指向 VPS");
+if (!externalLine.includes("https://hls.itunes.apple.com/dualsubs-external/apple/")) throw new Error("外部字幕轨没有指向本地选择入口");
+if (externalLine.includes("test-token")) throw new Error("本地入口泄露网关令牌");
 if (!externalLine.includes("title=Rocketman") || !externalLine.includes("year=2019")) throw new Error("外部字幕轨缺少匹配元数据");
 if (!externalLine.includes("duration=7334")) throw new Error("外部字幕轨缺少完整播放时长");
 if (!externalLine.includes("discontinuity=3")) throw new Error("外部字幕轨没有对齐 Apple 正片 discontinuity sequence");

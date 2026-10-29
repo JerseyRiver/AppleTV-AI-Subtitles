@@ -133,6 +133,12 @@ const oldMovie = await simulate(translate, two, { storage: retryStore, requestUR
 await simulate(translate, cue('Another movie'), { storage: retryStore, requestURL: filmB });
 const oldKeys = [...entries(retryStore).keys()];
 const retryArgument = { RetranslateNext: true, RetranslateRequest: '1' };
+// Reproduce the capture: unrelated master preloads arrive before the target.
+for (const id of ['6810076192', '6815407282', '6804087068']) {
+  await simulate(manifest, master, { storage: retryStore, mode: 'manifest', argument: retryArgument, requestURL: `https://play-edge.itunes.apple.com/WebObjects/MZPlayLocal.woa/hls/subscription/playlist.m3u8?a=${id}` });
+}
+assert.ok(JSON.parse(retryStore.get('AppleTVAI.Retranslate.v1')).pending, 'Preloaded masters consumed the action');
+assert.deepEqual(JSON.parse(retryStore.get('AppleTVAI.Retranslate.v1')).films, {});
 const prepared = await simulate(manifest, master, { storage: retryStore, mode: 'manifest', argument: retryArgument });
 assert.equal(prepared.count, 0, 'Preparing retry called an API without subtitle selection');
 const trackURI = M3U8.parse(prepared.output.body).find(x => /[?&]subtype=Translate/.test(x.OPTION?.URI || '')).OPTION.URI;
@@ -143,8 +149,11 @@ const segmentManifest = await simulate(manifest, '#EXTM3U\n#EXT-X-TARGETDURATION
 assert.match(segmentManifest.output.body, /signature=keep%2Bthis/);
 assert.match(segmentManifest.output.body, /dsfilm=apple%3A1234567890/);
 assert.match(segmentManifest.output.body, new RegExp(`dsretry=${retryToken}`));
+assert.equal(JSON.parse(retryStore.get('AppleTVAI.Retranslate.v1')).pending, retryToken, 'Subtitle playlist loading consumed action before VTT');
 const fresh = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: retryArgument });
 assert.equal(fresh.count, 2, 'Retry reused old complete/partial translation');
+assert.equal(JSON.parse(retryStore.get('AppleTVAI.Retranslate.v1')).films['apple:1234567890'], retryToken);
+assert.ok(!JSON.parse(retryStore.get('AppleTVAI.Retranslate.v1')).pending);
 assert.doesNotMatch(fresh.output.body, /错误的旧译文/);
 assert.ok(!entries(retryStore).has(oldKeys[0]), 'Invalid old movie cache was retained');
 assert.ok(entries(retryStore).has(oldKeys[1]), 'Another movie cache was removed');
@@ -158,6 +167,8 @@ const secondRetry = await simulate(translate, two, { storage: retryStore, reques
 assert.equal(secondRetry.count, 2);
 const thirdRetry = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: { RetranslateNext: true, RetranslateRequest: '3' } });
 assert.equal(thirdRetry.count, 2, 'New request number did not rearm without an observed off');
+const smallerRetry = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: { RetranslateNext: true, RetranslateRequest: '1' } });
+assert.equal(smallerRetry.count, 2, 'A smaller changed number did not trigger a new action');
 const finalReplay = await simulate(translate, two, { storage: retryStore, requestURL: filmA, argument: { RetranslateNext: false } });
 assert.equal(finalReplay.count, 0);
 
@@ -179,6 +190,40 @@ const externalReprocessed = await simulate(manifest, externalRetry.output.body, 
 const reprocessedTracks = M3U8.parse(externalReprocessed.output.body).filter(x => x.OPTION?.NAME === '外部中文字幕');
 assert.equal(reprocessedTracks.length, 1, 'External retry duplicated a generated track');
 assert.notEqual(new URL(reprocessedTracks[0].OPTION.URI).searchParams.get('retry'), externalToken, 'Reprocessed external master ignored a new retry action');
+const bridge = fs.readFileSync('plugin/scripts/External.Subtitles.request.bundle.js', 'utf8');
+function requestExternal(uri, storage, argument, failWrite = false) {
+  let output;
+  vm.runInNewContext(bridge, {
+    console: { log() {}, warn() {}, error() {} }, $loon: {}, $request: { url: uri }, $argument: argument,
+    $persistentStore: { read: key => storage.get(key) || null, write: (value, key) => failWrite ? false : (storage.set(key, value), true) },
+    $done: value => { output = value; },
+  });
+  return output.response;
+}
+const bridgeArgs = { GatewayURL: 'https://subtitles.example.com/v1/test-token', RetranslateNext: true, RetranslateRequest: '2' };
+const pendingExternal = JSON.parse(refStore.get('AppleTVAI.Retranslate.v1')).pending;
+assert.ok(pendingExternal, 'External master preload consumed the action');
+assert.equal(JSON.parse(refStore.get('AppleTVAI.Retranslate.v1')).films['apple:1234567890'], undefined);
+// Even a stale advertised URL must select the current pending operation.
+const redirected = requestExternal(externalURI, refStore, bridgeArgs);
+assert.equal(redirected.status, 302);
+const target = new URL(redirected.headers.Location);
+assert.equal(target.origin, 'https://subtitles.example.com');
+assert.equal(target.pathname, '/v1/test-token/apple/1234567890/playlist.m3u8');
+assert.equal(target.searchParams.get('retry'), pendingExternal);
+assert.equal(target.searchParams.get('title'), 'Synthetic Movie');
+assert.equal(target.searchParams.get('duration'), '7200');
+assert.equal(redirected.headers['Cache-Control'], 'no-store');
+assert.equal(requestExternal(externalURI, refStore, bridgeArgs).headers.Location, redirected.headers.Location);
+const another = requestExternal(externalURI.replace('/1234567890/', '/2234567890/'), refStore, bridgeArgs);
+assert.equal(new URL(another.headers.Location).searchParams.get('retry'), null, 'Stale advertised token retried another film');
+const lowered = requestExternal(externalURI, refStore, { ...bridgeArgs, RetranslateRequest: '1' });
+assert.notEqual(new URL(lowered.headers.Location).searchParams.get('retry'), pendingExternal);
+assert.equal(requestExternal(externalURI, refStore, { ...bridgeArgs, RetranslateNext: false }).headers.Location, lowered.headers.Location);
+const invalidStore = new Map();
+assert.equal(requestExternal(externalURI, invalidStore, { ...bridgeArgs, GatewayURL: '' }).status, 503);
+assert.equal(invalidStore.size, 0, 'Invalid gateway consumed a pending action');
+assert.equal(requestExternal(externalURI, invalidStore, bridgeArgs, true).status, 503);
 const failedStore = { getItem: () => ({}), setItem: () => false };
 assert.throws(() => new Retranslate(failedStore, true), /保存失败/);
 console.log('One-shot retry passed: film isolation, master/segment propagation, no pre-selection API, fresh complete/partial cache, off persistence, request-number rearm, server token stability and failed-write safety.');

@@ -24,3 +24,10 @@ for (const line of plugin.split('\n').filter(line => line.startsWith('http-respo
   assert.ok(/apple\\\.com/.test(line), 'Rule outside Apple scope');
 }
 console.log('Public plugin paths, branding, Apple scope and configuration passed.');
+const requestLine = plugin.split('\n').find(line => line.startsWith('http-request '));
+assert.ok(requestLine?.includes('External.Subtitles.request.bundle.js?v=' + version));
+assert.ok(requestLine.includes('{RetranslateNext}') && requestLine.includes('{RetranslateRequest}') && requestLine.includes('{GatewayURL}'));
+const routePattern = new RegExp(requestLine.split(' ')[1]);
+assert.ok(routePattern.test('https://hls.itunes.apple.com/dualsubs-external/apple/1234567890/playlist.m3u8?subtype=External'));
+assert.ok(!routePattern.test('https://hls.itunes.apple.com/WebObjects/MZPlay.woa/hls/playlist.m3u8'));
+assert.ok(!routePattern.test('https://unrelated.example.com/dualsubs-external/apple/1234567890/playlist.m3u8'));
