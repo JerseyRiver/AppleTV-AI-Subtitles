@@ -46,7 +46,7 @@ if (format === "application/octet-stream" || format === "text/plain") format = d
 	credential = Settings.Gemini.APIKey;
 	$response.headers["X-DualSubs-Gemini-Key-Source"] = liveAPIKey ? "argument" : credential ? "storage" : "missing";
 	$response.headers["X-DualSubs-Gemini-Model"] = Settings.Gemini.Model;
-	$response.headers["X-DualSubs-Gemini-Response-Format"] = "ids-texts-v1";
+	$response.headers["X-DualSubs-Gemini-Response-Format"] = "id-text-objects-v1";
 	Console.logLevel = Settings.LogLevel;
 	const languages = [url.searchParams?.get("lang")?.toUpperCase?.() ?? Settings.Languages[0], (url.searchParams?.get("tlang") ?? Caches?.tlang)?.toUpperCase?.() ?? Settings.Languages[1]];
 	const body = VTT.parse($response.body);

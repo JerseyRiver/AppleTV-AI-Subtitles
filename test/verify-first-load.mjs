@@ -15,7 +15,7 @@ async function simulate({ count = 1097, parallel = 3, runs = 1, duration = 28000
   const body = bodyFor(count);
   const send = (request, callback) => {
     const payload = JSON.parse(request.body);
-    assert.deepEqual(payload.generationConfig.responseSchema.required, ['ids', 'texts']);
+    assert.deepEqual(payload.generationConfig.responseSchema.required, ['translations']);
     const items = JSON.parse(payload.contents[0].parts[0].text);
     const number = requests.length + 1;
     requests.push({ at: now - start, cues: items.length, timeout: request.timeout });
@@ -28,7 +28,7 @@ async function simulate({ count = 1097, parallel = 3, runs = 1, duration = 28000
       const rows = [...items].reverse();
       const ids = rows.map(item => item.id);
       if (duplicateIds && ids.length > 1) ids[1] = ids[0];
-      callback(null, { status: 200, headers: {} }, JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ ids, texts: rows.map(item => `新译文 ${item.text}`) }) }] } }] }));
+      callback(null, { status: 200, headers: {} }, JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ translations: rows.map((item, i) => ({ id: ids[i], text: `新译文 ${item.text}` })) }) }] } }] }));
     }, elapsed);
   };
   for (let i = 0; i < runs; i++) {
@@ -85,6 +85,6 @@ assert.equal(bounded.requests.length, 7);
 const stopped = await simulate({ count: 2401, parallel: 2, duration: 1000, errorBatch: 1 });
 assert.equal(stopped.requests.length, 2, 'Quota failure launched queued work');
 const invalid = await simulate({ duplicateIds: true, duration: 1000 });
-assert.equal(invalid.results[0].output.body, invalid.body, 'Duplicate compact IDs produced mismatched captions');
+assert.equal(invalid.results[0].output.body, invalid.body, 'Duplicate IDs produced mismatched captions');
 assert.equal(invalid.results[0].output.headers['X-DualSubs-Gemini'], 'error');
-console.log('First-load scheduling passed: three batches in one wave, 30-second virtual playback window, single leader, compact output pairing, resume, cache reuse, parallel bounds and quota stop.');
+console.log('First-load scheduling passed: three batches in one wave, 30-second virtual playback window, single leader, ID-bound output, resume, cache reuse, parallel bounds and quota stop.');
